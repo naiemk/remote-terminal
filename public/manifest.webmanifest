@@ -1,0 +1,9 @@
+{
+  "name": "Remote Term",
+  "short_name": "Term",
+  "start_url": "/",
+  "display": "fullscreen",
+  "background_color": "#0b0d12",
+  "theme_color": "#0b0d12",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

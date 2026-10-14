@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=overlays-content">
+  <meta name="theme-color" content="#0b0d12">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Remote Term</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/vendor/xterm/css/xterm.css">
+  <link rel="stylesheet" href="/app.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "@xterm/xterm": "/vendor/xterm/lib/xterm.mjs",
+      "@xterm/addon-fit": "/vendor/addon-fit/lib/addon-fit.mjs",
+      "@xterm/addon-webgl": "/vendor/addon-webgl/lib/addon-webgl.mjs",
+      "@xterm/addon-web-links": "/vendor/addon-web-links/lib/addon-web-links.mjs",
+      "@xterm/addon-unicode11": "/vendor/addon-unicode11/lib/addon-unicode11.mjs"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- Login -->
+  <section id="login" class="screen" hidden>
+    <form id="login-form" class="card" autocomplete="on">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 7 5 5-5 5"/><path d="M13 17h6"/></svg>
+      </div>
+      <h1>Remote Term</h1>
+      <p class="sub">Enter the password to open your session.</p>
+      <input type="text" name="username" value="remote-term" autocomplete="username" hidden>
+      <div class="field">
+        <input id="password" name="password" type="password" placeholder="Password" autocomplete="current-password" required autofocus>
+        <button type="button" id="reveal" class="ghost-icon" aria-label="Show password">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+      <button type="submit" class="primary" id="login-btn">Unlock</button>
+      <p class="error" id="login-error" role="alert"></p>
+    </form>
+  </section>
+
+  <!-- Session picker -->
+  <section id="picker" class="screen" hidden>
+    <div class="card picker-card">
+      <div class="picker-head">
+        <h1>Sessions</h1>
+        <button type="button" id="picker-close" class="ghost-icon" aria-label="Back to terminal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <p class="sub" id="picker-note"></p>
+      <div id="session-list" class="session-list"></div>
+      <p class="hint">Start another with <code>rterm</code> on your machine.</p>
+    </div>
+  </section>
+
+  <!-- Terminal -->
+  <main id="termview" class="screen" hidden>
+    <div id="stage">
+      <div id="term"></div>
+
+      <div id="banner" class="banner" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="banner-text">Connecting…</span>
+      </div>
+
+      <div id="hud">
+        <button id="status" class="pill" aria-haspopup="menu" aria-expanded="false">
+          <span class="dot" data-state="off"></span>
+          <span id="status-text">offline</span>
+        </button>
+        <div id="menu" class="menu" role="menu" hidden>
+          <div class="menu-head" id="menu-head"></div>
+          <div class="menu-row">
+            <span>Font size</span>
+            <div class="stepper">
+              <button data-act="font-" aria-label="Smaller">−</button>
+              <output id="font-size">14</output>
+              <button data-act="font+" aria-label="Larger">+</button>
+            </div>
+          </div>
+          <button class="menu-item" data-act="sessions" role="menuitem">Sessions <span class="count" id="session-count"></span></button>
+          <button class="menu-item" data-act="keys" role="menuitem">Show key bar <span class="switch" id="keys-switch"></span></button>
+          <button class="menu-item" data-act="fullscreen" id="fs-item" role="menuitem">Fullscreen</button>
+          <button class="menu-item" data-act="redraw" role="menuitem">Redraw screen</button>
+          <button class="menu-item danger" data-act="logout" role="menuitem">Sign out</button>
+        </div>
+      </div>
+
+      <button id="fab" class="fab" aria-label="Compose input">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.4 3.6a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </button>
+    </div>
+
+    <nav id="keybar" aria-label="Special keys">
+      <div class="keys">
+        <button data-key="esc">esc</button>
+        <button data-key="tab">tab</button>
+        <button data-key="stab">⇧tab</button>
+        <button data-key="ctrlc" class="warn">^C</button>
+        <button data-key="up" aria-label="Up">↑</button>
+        <button data-key="down" aria-label="Down">↓</button>
+        <button data-key="left" aria-label="Left">←</button>
+        <button data-key="right" aria-label="Right">→</button>
+        <button data-key="enter" aria-label="Enter">⏎</button>
+        <button data-key="ctrld">^D</button>
+        <button data-key="ctrll">^L</button>
+        <button data-key="pgup">pgup</button>
+        <button data-key="pgdn">pgdn</button>
+      </div>
+      <button id="kbd" class="kbd" aria-label="Type directly" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>
+      </button>
+    </nav>
+
+    <!-- Compose sheet -->
+    <div id="scrim" hidden></div>
+    <section id="sheet" aria-label="Compose" aria-hidden="true">
+      <div class="grip" aria-hidden="true"></div>
+      <textarea id="compose" rows="1" placeholder="Type or dictate…" autocapitalize="sentences" autocomplete="off" spellcheck="true"></textarea>
+      <div class="sheet-bar">
+        <button id="mic" class="round" aria-label="Dictate" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg>
+        </button>
+        <label class="toggle">
+          <input type="checkbox" id="auto-enter" checked>
+          <span class="track"><span class="thumb"></span></span>
+          <span>Press enter</span>
+        </label>
+        <span class="spacer"></span>
+        <button id="send" class="primary send" aria-label="Send">
+          <span>Send</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
