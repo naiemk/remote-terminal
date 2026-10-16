@@ -1,0 +1,183 @@
+#!/usr/bin/env node
+// remote-terminal-server: starts the server, and tells you how to reach it from your phone.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import readline from 'node:readline/promises';
+import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import dotenv from 'dotenv';
+import { ensureConfig } from '../server/config.js';
+import * as tailscale from '../server/tailscale.js';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+const INSTALL_URL = 'https://raw.githubusercontent.com/naiemk/remote-terminal/main/install.sh';
+const DOCS_URL = 'https://naiemk.gitbook.io/remote-terminal';
+
+const tty = process.stdout.isTTY && !process.env.NO_COLOR;
+const paint = (code) => (s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : String(s));
+const bold = paint(1), dim = paint(2), green = paint(32), yellow = paint(33), red = paint(31), cyan = paint(36);
+const tildify = (p) => (p.startsWith(os.homedir() + '/') ? '~' + p.slice(os.homedir().length) : p);
+
+const HELP = `${bold('remote-terminal-server')} ${VERSION}
+Use the terminals on this computer from your phone's browser, over Tailscale.
+
+${bold('Usage')}
+  remote-terminal-server [start] [options]   start the server (default)
+  remote-terminal-server doctor              check Tailscale and settings, then exit
+  remote-terminal-server edit                open commands.json in $EDITOR
+  remote-terminal-server config              print where the settings live
+  remote-terminal-server update              reinstall the latest version
+
+${bold('Options')}
+  -p, --port <n>    local port (default 12700, or PORT in .env)
+  -y, --yes         run \`tailscale serve\` without asking when it isn't set up
+      --no-serve    never offer to run \`tailscale serve\`
+      --no-qr       don't print a QR code of the URL
+  -h, --help        show this help
+  -v, --version     print the version
+
+${bold('Settings')}  ~/.remote-terminal-server/commands.json and .env (or $REMOTE_TERMINAL_HOME)
+${bold('Docs')}      ${DOCS_URL}`;
+
+function parseArgs(argv) {
+  const o = { cmd: 'start', port: null, yes: false, serve: true, qr: true };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '-h' || a === '--help' || a === 'help') o.cmd = 'help';
+    else if (a === '-v' || a === '--version') o.cmd = 'version';
+    else if (a === '-p' || a === '--port') o.port = argv[++i];
+    else if (a.startsWith('--port=')) o.port = a.slice(7);
+    else if (a === '-y' || a === '--yes') o.yes = true;
+    else if (a === '--no-serve') o.serve = false;
+    else if (a === '--no-qr') o.qr = false;
+    else if (['start', 'doctor', 'edit', 'config', 'update'].includes(a)) o.cmd = a;
+    else { console.error(`Unknown argument: ${a}\n\n${HELP}`); process.exit(2); }
+  }
+  if (o.port !== null && !(Number(o.port) > 0 && Number(o.port) < 65536)) {
+    console.error(`--port needs a number between 1 and 65535`);
+    process.exit(2);
+  }
+  return o;
+}
+
+async function ask(question) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = (await rl.question(question)).trim().toLowerCase();
+  rl.close();
+  return answer === '' || answer === 'y' || answer === 'yes';
+}
+
+function printQr(url) {
+  return import('qrcode-terminal').then(({ default: qr }) => new Promise((resolve) => {
+    qr.generate(url, { small: true }, (code) => { console.log(code.replace(/^/gm, '   ')); resolve(); });
+  })).catch(() => {});
+}
+
+// Reports how the server can be reached; offers to run `tailscale serve` if that's all that's missing.
+// Nothing here is fatal: without Tailscale the server still runs on 127.0.0.1.
+async function checkTailscale(port, opts) {
+  let ts = await tailscale.detect(port);
+
+  if (!ts.installed) {
+    console.log(`${yellow('!')} Tailscale isn't installed. The server runs anyway, but only this computer can open it.`);
+    console.log(`  To use it from your phone, install Tailscale here and on the phone and sign in to both:`);
+    console.log(`  ${cyan(tailscale.DOWNLOAD_URL)}`);
+    console.log(`  Then run remote-terminal-server again.\n`);
+    return ts;
+  }
+  if (!ts.running) {
+    console.log(`${yellow('!')} Tailscale is installed but not connected (${ts.state}). Only this computer can open it.`);
+    console.log(`  Connect with ${bold('tailscale up')} (or open the Tailscale app and sign in), then run remote-terminal-server again.`);
+    console.log(`  Help: ${cyan(tailscale.DOWNLOAD_URL)}\n`);
+    return ts;
+  }
+  if (!ts.dnsName || !ts.magicDNS) {
+    console.log(`${yellow('!')} MagicDNS is off for your tailnet, so this machine has no *.ts.net name. Turn it on under DNS in`);
+    console.log(`  ${cyan('https://login.tailscale.com/admin/dns')} (HTTPS certificates need it).\n`);
+  }
+
+  if (!ts.url && opts.serve && ts.dnsName) {
+    const cmd = `tailscale ${tailscale.serveArgs(port, ts).join(' ')}`;
+    if (ts.rootTaken) console.log(`${dim(`https://${ts.dnsName} already proxies to ${ts.rootTaken}, so this would use another port.`)}`);
+    const go = opts.yes || await ask(`${bold('?')} Make it reachable from your tailnet? Runs ${bold(cmd)} [Y/n] `);
+    if (go) {
+      const r = await tailscale.enableServe(port, ts);
+      if (!r.ok) {
+        console.log(`${red('✗')} ${cmd} failed.`);
+        if (r.needsOperator) console.log(`  On Linux, allow your user to change Tailscale settings once with:\n  ${bold(`sudo tailscale set --operator=$USER`)}`);
+        console.log(`  You can run it yourself later. More: ${cyan(tailscale.SERVE_DOCS_URL)}\n`);
+      }
+      ts = await tailscale.detect(port);
+    } else {
+      console.log(`  Skipped. Run ${bold(cmd)} when you want to use it from your phone.\n`);
+    }
+  }
+
+  if (ts.funnel) {
+    console.log(`${red('✗ DANGER')}: ${ts.url} is published to the public internet with Tailscale Funnel.`);
+    console.log(`  Anyone could get a shell on this computer. Turn it off now: ${bold('tailscale funnel reset')}\n`);
+  }
+  return ts;
+}
+
+function printReady(port, ts) {
+  console.log('');
+  if (ts.url) {
+    console.log(`${green('●')} Open on your phone ${dim('(it must be on your tailnet)')}:`);
+    console.log(`  ${bold(cyan(ts.url))}`);
+  } else if (ts.running) {
+    console.log(`${yellow('●')} Not reachable from your tailnet yet. Run: ${bold(`tailscale ${tailscale.serveArgs(port, ts).join(' ')}`)}`);
+  }
+  console.log(`  ${dim('On this computer:')} http://127.0.0.1:${port}`);
+  console.log(`  ${dim('Commands:')} ${tildify(path.join(configDir, 'commands.json'))}  ${dim('(edit any time; no restart needed)')}`);
+  console.log(`  ${dim('Stop with Ctrl+C. Running terminals stop with the server.')}\n`);
+}
+
+// ---------- main ----------
+
+const opts = parseArgs(process.argv.slice(2));
+if (opts.cmd === 'help') { console.log(HELP); process.exit(0); }
+if (opts.cmd === 'version') { console.log(VERSION); process.exit(0); }
+
+const { CONFIG_DIR: configDir, COMMANDS_FILE, ENV_FILE } = ensureConfig();
+dotenv.config({ path: [ENV_FILE, path.join(ROOT, '.env')], quiet: true });
+if (opts.port) process.env.PORT = String(opts.port);
+const port = Number(process.env.PORT || 12700);
+
+if (opts.cmd === 'config') {
+  console.log(`settings   ${configDir}\ncommands   ${COMMANDS_FILE}\nenv        ${ENV_FILE}\ninstalled  ${ROOT}`);
+  process.exit(0);
+}
+
+if (opts.cmd === 'edit') {
+  const editor = process.env.VISUAL || process.env.EDITOR || (process.platform === 'darwin' ? 'open -t' : 'nano');
+  const r = spawnSync(process.env.SHELL || '/bin/sh', ['-c', `${editor} "$1"`, 'sh', COMMANDS_FILE], { stdio: 'inherit' });
+  process.exit(r.status ?? 1);
+}
+
+if (opts.cmd === 'update') {
+  const child = spawn('bash', ['-c', `curl -fsSL ${INSTALL_URL} | bash`], { stdio: 'inherit' });
+  child.on('exit', (code) => process.exit(code ?? 1));
+} else if (opts.cmd === 'doctor') {
+  console.log(`${bold('remote-terminal-server')} ${VERSION}  ${dim(`node ${process.version}, ${process.platform}-${process.arch}`)}\n`);
+  try {
+    const commands = JSON.parse(fs.readFileSync(COMMANDS_FILE, 'utf8'));
+    console.log(`${green('✓')} ${tildify(COMMANDS_FILE)}: ${Object.keys(commands).join(', ') || 'empty'}`);
+  } catch (err) {
+    console.log(`${red('✗')} ${tildify(COMMANDS_FILE)}: ${err.message}`);
+  }
+  try { await import('node-pty'); console.log(`${green('✓')} node-pty loads`); }
+  catch (err) { console.log(`${red('✗')} node-pty doesn't load (${err.message}). Reinstall with: remote-terminal-server update`); }
+  const ts = await checkTailscale(port, { ...opts, serve: false });
+  if (ts.running) console.log(ts.url ? `${green('✓')} Tailscale: ${ts.url} → 127.0.0.1:${port}` : `${yellow('!')} Tailscale is connected but not serving port ${port}. Run: tailscale ${tailscale.serveArgs(port, ts).join(' ')}`);
+} else {
+  console.log(`${bold('remote-terminal-server')} ${dim(VERSION)}\n`);
+  const ts = await checkTailscale(port, opts);
+  const { listening } = await import('../server/index.js');
+  await listening;
+  printReady(port, ts);
+  if (ts.url && opts.qr && process.stdout.isTTY) await printQr(ts.url);
+}

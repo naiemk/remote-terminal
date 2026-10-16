@@ -30,58 +30,6 @@ const THEME = {
   brightBlue: '#a6c3ff', brightMagenta: '#dcbcff', brightCyan: '#a5efe4', brightWhite: '#ffffff',
 };
 
-// ================= auth =================
-
-let token = store.get('token', null);
-
-async function login(password) {
-  const res = await fetch('/api/login', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || 'Login failed');
-  return body.token;
-}
-
-async function tokenValid() {
-  try { return (await fetch('/api/me', { headers: { authorization: 'Bearer ' + token } })).ok; }
-  catch { return true; } // network trouble isn't proof the token is bad
-}
-
-function showLogin(msg = '') {
-  disconnect();
-  token = null; store.del('token');
-  $('#termview').hidden = true;
-  hidePicker();
-  $('#login').hidden = false;
-  $('#login-error').textContent = msg;
-  setTimeout(() => $('#password').focus(), 50);
-}
-
-$('#login-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const btn = $('#login-btn');
-  btn.disabled = true; btn.textContent = 'Unlocking…';
-  try {
-    token = await login($('#password').value);
-    store.set('token', token);
-    $('#password').value = '';
-    openTerminal();
-  } catch (err) {
-    $('#login-error').textContent = err.message;
-    const card = $('.card');
-    card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
-  } finally {
-    btn.disabled = false; btn.textContent = 'Unlock';
-  }
-});
-
-$('#reveal').addEventListener('click', () => {
-  const p = $('#password');
-  p.type = p.type === 'password' ? 'text' : 'password';
-  p.focus();
-});
-
 // ================= terminal =================
 
 let term, fit, ws;
@@ -99,7 +47,7 @@ async function createTerminal() {
     fontFamily: '"JetBrains Mono", ui-monospace, Menlo, monospace',
     fontSize, lineHeight: 1.15, letterSpacing: 0,
     theme: THEME, cursorBlink: true, cursorStyle: 'bar', cursorWidth: 2,
-    scrollback: 5000, allowProposedApi: true, macOptionIsMeta: true,
+    scrollback: 5000, allowProposedApi: true, macOptionIsMeta: true, macOptionClickForcesSelection: true,
     smoothScrollDuration: 0, drawBoldTextInBrightColors: false,
   });
   fit = new FitAddon();
@@ -118,6 +66,7 @@ async function createTerminal() {
 
   term.onData((d) => sendInput(d));
   term.onBinary((d) => sendInput(d));
+  term.attachCustomKeyEventHandler(clipboardKeys);
 
   // On phones, tapping the terminal shouldn't pop the keyboard; use compose or the ⌨ toggle.
   if (isTouch) setDirectTyping(false);
@@ -212,29 +161,27 @@ function connect() {
   setState('wait', 'connecting');
   showBanner('Connecting…');
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const sock = new WebSocket(`${proto}//${location.host}/ws/client?token=${encodeURIComponent(token)}&session=${encodeURIComponent(sessionId)}`);
+  const sock = new WebSocket(`${proto}//${location.host}/ws?id=${encodeURIComponent(instanceId)}`);
   sock.binaryType = 'arraybuffer';
   ws = sock;
-  let opened = false;
 
   sock.onopen = () => {
-    opened = true; retry = 0;
+    retry = 0;
     doFit();
   };
   sock.onmessage = (e) => {
     if (e.data instanceof ArrayBuffer) return term.write(new Uint8Array(e.data), liftSoon);
     let msg; try { msg = JSON.parse(e.data); } catch { return; }
     if (msg.t === 'status') onStatus(msg);
-    else if (msg.t === 'reset') { term.reset(); doFit(); }
   };
-  sock.onclose = async (e) => {
+  sock.onclose = (e) => {
     if (ws !== sock || !wantConnected) return;
     if (e.code === 4404) {
+      const name = meta?.command || 'The instance';
       disconnect();
-      forgetSession();
-      return showPicker({ auto: true, note: 'That session has ended.' });
+      instanceId = null;
+      return showHome({ note: e.reason === 'no such instance' ? `${name} is no longer running.` : `${name} ${e.reason}.` });
     }
-    if (!opened && !(await tokenValid())) return showLogin('Session expired. Sign in again.');
     setState('off', 'offline');
     const delay = Math.min(10_000, 400 * 2 ** retry++);
     showBanner(`Disconnected · retrying in ${Math.ceil(delay / 1000)}s`);
@@ -251,24 +198,13 @@ function disconnect() {
 
 let meta = null;
 function onStatus(msg) {
-  meta = msg.meta;
-  if (msg.host) {
-    hideBanner();
-    setState('on', sessionLabel(meta));
-  } else {
-    setState('wait', 'host away');
-    showBanner('Host disconnected · waiting for it to come back', true);
-  }
-  $('#menu-head').innerHTML = meta
-    ? `<b>${esc(sessionLabel(meta))}</b><br>${esc(meta.cmd || '')}<br>${esc(meta.hostname || '')} · ${msg.clients} viewer${msg.clients === 1 ? '' : 's'}`
-    : 'No host connected';
+  meta = msg;
+  hideBanner();
+  setState('on', msg.command);
+  $('#menu-head').innerHTML = `<b>${esc(msg.command)}</b><br>${esc(msg.cmd)}<br>${esc(msg.cwd)} · ${plural(msg.clients, 'viewer')}`;
 }
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
-const baseName = (p) => (p || '').replace(/\/+$/, '').split('/').pop() || p || '';
-function sessionLabel(m) {
-  return m?.name || baseName(m?.cwd) || m?.cmd || 'session';
-}
 function ago(t) {
   const m = Math.round((Date.now() - t) / 60_000);
   if (m < 1) return 'just now';
@@ -281,7 +217,9 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 
 // visibility: reconnect immediately when the phone comes back to the tab
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && wantConnected && ws?.readyState !== WebSocket.OPEN) connect();
+  if (document.visibilityState !== 'visible') return;
+  if (wantConnected && ws?.readyState !== WebSocket.OPEN) connect();
+  if (!$('#home').hidden) refreshHome();
 });
 
 // ================= HUD =================
@@ -332,19 +270,122 @@ menu.addEventListener('click', (e) => {
   if (act === 'font+') { fontSize++; applyFontSize(); return; }
   if (act === 'font-') { fontSize--; applyFontSize(); return; }
   toggleMenu(false);
-  if (act === 'sessions') showPicker();
+  if (act === 'home') showHome();
   if (act === 'keys') { keysOn = !keysOn; applyKeys(); }
   if (act === 'fullscreen') {
     document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {});
   }
   if (act === 'redraw') { term.clear(); sendInput('\x0c'); }
-  if (act === 'logout') showLogin();
+  if (act === 'copy') openCopy();
+  if (act === 'paste') pasteClipboard();
 });
+
+// ================= copy / paste =================
+
+let toastTimer;
+function toast(msg) {
+  const el = $('#toast');
+  el.textContent = msg; el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 1600);
+}
+
+async function copyText(text) {
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Older browsers / no clipboard permission: copy through a temporary textarea.
+    const ta = Object.assign(document.createElement('textarea'), { value: text, readOnly: true });
+    ta.style.cssText = 'position:fixed;opacity:0;top:0';
+    document.body.append(ta); ta.select();
+    try { document.execCommand('copy'); } finally { ta.remove(); }
+  }
+  navigator.vibrate?.(8);
+  toast('Copied');
+}
+
+async function pasteClipboard() {
+  let text;
+  try { text = await navigator.clipboard.readText(); } catch {}
+  if (text) { term.paste(text); navigator.vibrate?.(8); return; }
+  // Clipboard reads need permission (and HTTPS); fall back to the compose box, where the OS paste works.
+  openCompose();
+  toast(text === '' ? 'Clipboard is empty' : 'Paste into the box, then send');
+}
+
+// The terminal's text: the whole scrollback for a shell, the current screen for full-screen apps.
+// Wrapped rows are joined back into their original lines.
+function bufferText() {
+  const buf = term.buffer.active;
+  const lines = [];
+  for (let i = 0; i < buf.length; i++) {
+    const line = buf.getLine(i);
+    if (!line) continue;
+    const text = line.translateToString(true);
+    if (line.isWrapped && lines.length) lines[lines.length - 1] += text; else lines.push(text);
+  }
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  return lines.join('\n');
+}
+
+// Phones can't select inside the terminal (touches scroll it), so show its text in a plain view
+// where the OS's own long-press selection and copy menu work.
+function openCopy() {
+  if (!term) return;
+  term.blur();
+  const pre = $('#copy-text');
+  pre.textContent = bufferText();
+  pre.style.fontSize = Math.max(11, fontSize) + 'px';
+  $('#copy-all').textContent = 'Copy all';
+  $('#copyview').hidden = false;
+  // Start where the terminal was looking: the bottom, unless it was scrolled back.
+  const buf = term.buffer.active;
+  const atBottom = buf.viewportY >= buf.baseY;
+  pre.scrollTop = atBottom ? pre.scrollHeight : (buf.viewportY / Math.max(1, buf.length)) * pre.scrollHeight;
+}
+function closeCopy() {
+  getSelection()?.removeAllRanges();
+  $('#copyview').hidden = true;
+  if (!isTouch) term?.focus();
+}
+$('#copy-close').addEventListener('click', closeCopy);
+$('#copy-all').addEventListener('pointerdown', (e) => e.preventDefault()); // keep the selection
+$('#copy-all').addEventListener('click', () => copyText(selectedCopyText() || $('#copy-text').textContent));
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#copyview').hidden) closeCopy(); });
+const selectedCopyText = () => {
+  const sel = getSelection();
+  return sel && !sel.isCollapsed && $('#copy-text').contains(sel.anchorNode) ? sel.toString() : '';
+};
+document.addEventListener('selectionchange', () => {
+  if (!$('#copyview').hidden) $('#copy-all').textContent = selectedCopyText() ? 'Copy selection' : 'Copy all';
+});
+
+// Desktop: Ctrl+Shift+C / Cmd+C copy the selection, Ctrl+Shift+V pastes. Plain Ctrl+C stays ^C.
+// (Cmd+V goes through the browser's own paste event, which xterm handles.)
+function clipboardKeys(e) {
+  if (e.type !== 'keydown') return true;
+  const k = e.key.toLowerCase();
+  if ((e.ctrlKey && e.shiftKey && k === 'c') || (e.metaKey && !e.ctrlKey && k === 'c')) {
+    if (term.hasSelection()) copyText(term.getSelection());
+    e.preventDefault();
+    return false;
+  }
+  if (e.ctrlKey && e.shiftKey && k === 'v') {
+    e.preventDefault();
+    pasteClipboard();
+    return false;
+  }
+  return true;
+}
 
 // ================= key bar =================
 
 $('#keybar .keys').addEventListener('pointerdown', (e) => e.preventDefault()); // keep focus where it is
 $('#keybar .keys').addEventListener('click', (e) => {
+  const action = e.target.closest('[data-action]')?.dataset.action;
+  if (action === 'copy') return openCopy();
+  if (action === 'paste') return pasteClipboard();
   const key = e.target.closest('[data-key]')?.dataset.key;
   if (!key) return;
   let seq = KEYS[key];
@@ -520,89 +561,134 @@ addEventListener('resize', onViewport);
 // ================= boot =================
 
 async function openTerminal() {
-  $('#login').hidden = true;
   $('#termview').hidden = false;
   applyKeys();
   await createTerminal();
   onViewport();
   doFit();
   wakeHud();
-  // Rejoin the last session if it's still running, go straight in if there's only one, otherwise ask.
-  const list = await fetchSessions();
-  if (!list) return;
-  const pick = list.find((x) => x.id === sessionId) || (list.length === 1 ? list[0] : null);
-  if (pick) attach(pick.id); else showPicker({ auto: true, list });
+  showHome();
 }
 
-// ================= sessions =================
+// ================= home: instances + commands =================
 
-let sessionId = store.get('session', null);
-let pickerTimer = null, pickerAuto = false;
+let instanceId = null;
+let homeTimer = null;
+let confirmKill = null, confirmTimer = null; // a kill needs a second tap within 3s
+const cwdInput = $('#cwd');
+cwdInput.value = store.get('cwd', '');
+cwdInput.addEventListener('change', () => store.set('cwd', cwdInput.value.trim()));
 
-function forgetSession() { sessionId = null; store.del('session'); }
+async function api(method, url, body) {
+  const res = await fetch(url, {
+    method, headers: body ? { 'content-type': 'application/json' } : {}, body: body && JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
 
-async function fetchSessions() {
-  try {
-    const res = await fetch('/api/sessions', { headers: { authorization: 'Bearer ' + token } });
-    if (res.status === 401) { showLogin('Session expired. Sign in again.'); return null; }
-    const { sessions } = await res.json();
-    $('#session-count').textContent = sessions.length > 1 ? sessions.length : '';
-    return sessions;
-  } catch { return []; }
+async function showHome({ note = '' } = {}) {
+  $('#home-note').textContent = note;
+  $('#home-error').textContent = '';
+  $('#home-close').hidden = !(instanceId && wantConnected);
+  $('#home').hidden = false;
+  clearInterval(homeTimer);
+  homeTimer = setInterval(() => refreshHome({ poll: true }), 2500);
+  await refreshHome();
+}
+function hideHome() {
+  clearInterval(homeTimer);
+  $('#home').hidden = true;
+}
+
+async function refreshHome({ poll = false } = {}) {
+  if ($('#home').hidden || (poll && document.visibilityState !== 'visible')) return;
+  let state;
+  try { state = await api('GET', '/api/state'); }
+  catch { $('#home-error').textContent = 'Can’t reach the server.'; return; }
+  if ($('#home').hidden) return;
+  if ($('#home-error').textContent === 'Can’t reach the server.') $('#home-error').textContent = '';
+  cwdInput.placeholder = state.defaultCwd;
+  renderInstances(state.instances);
+  renderCommands(state.commands);
+}
+
+function renderInstances(list) {
+  const box = $('#instance-list');
+  const confirming = confirmKill;
+  const html = list.length ? list.map((x) => `
+    <div class="session" aria-current="${x.id === instanceId}">
+      <button class="s-open" data-join="${esc(x.id)}">
+        <span class="dot" data-state="on"></span>
+        <span class="s-main"><b>${esc(x.command)}</b><small>${esc(x.cwd)}</small></span>
+        <span class="s-meta">${ago(x.created)}<br>${plural(x.clients, 'viewer')}</span>
+      </button>
+      <button class="s-kill${x.id === confirming ? ' confirm' : ''}" data-kill="${esc(x.id)}" aria-label="Kill ${esc(x.command)}">
+        ${x.id === confirming ? 'Kill?' : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'}
+      </button>
+    </div>`).join('') : '<div class="empty">Nothing running. Start something below.</div>';
+  if (box.dataset.html !== html) box.innerHTML = box.dataset.html = html; // don't disturb a tap in progress
+}
+
+function renderCommands(list) {
+  const box = $('#command-list');
+  const html = list.map((c) => `
+    <button class="cmd" data-cmd="${esc(c.name)}"><b>${esc(c.name)}</b><small>${esc(c.cmd)}</small></button>`).join('');
+  if (box.dataset.html !== html) box.innerHTML = box.dataset.html = html; // don't disturb a tap in progress
 }
 
 function attach(id) {
-  hidePicker();
-  if (id === sessionId && ws) return;
+  hideHome();
+  if (id === instanceId && wantConnected) return;
   disconnect();
-  sessionId = id; store.set('session', id);
+  instanceId = id;
   meta = null;
   term.reset();
   if (!isTouch) term.focus();
   connect();
 }
 
-// auto: opened because there was nothing to attach to; it attaches by itself once exactly one session exists.
-async function showPicker({ auto = false, note = '', list = null } = {}) {
-  pickerAuto = auto;
-  $('#picker-note').textContent = note;
-  $('#picker-close').hidden = !sessionId;
-  $('#picker').hidden = false;
-  clearInterval(pickerTimer);
-  pickerTimer = setInterval(refreshPicker, 2500);
-  renderSessions(list || await fetchSessions());
-}
-function hidePicker() {
-  clearInterval(pickerTimer);
-  $('#picker').hidden = true;
-}
-async function refreshPicker() {
-  if ($('#picker').hidden || document.visibilityState !== 'visible') return;
-  const list = await fetchSessions();
-  if (!list || $('#picker').hidden) return;
-  if (pickerAuto && !sessionId && list.length === 1) return attach(list[0].id);
-  renderSessions(list);
-}
-
-function renderSessions(list) {
-  if (!list) return;
-  const box = $('#session-list');
-  if (!list.length) {
-    box.innerHTML = '<div class="empty">No sessions running.</div>';
+$('#instance-list').addEventListener('click', async (e) => {
+  const kill = e.target.closest('[data-kill]');
+  if (kill) {
+    const id = kill.dataset.kill;
+    clearTimeout(confirmTimer);
+    if (confirmKill !== id) {
+      confirmKill = id;
+      kill.classList.add('confirm'); kill.textContent = 'Kill?';
+      confirmTimer = setTimeout(() => { confirmKill = null; refreshHome(); }, 3000);
+      return refreshHome();
+    }
+    confirmKill = null;
+    kill.disabled = true;
+    try { await api('DELETE', `/api/instances/${encodeURIComponent(id)}`); }
+    catch (err) { $('#home-error').textContent = err.message; }
+    setTimeout(refreshHome, 400);
     return;
   }
-  box.innerHTML = list.map((x) => `
-    <button class="session" data-id="${esc(x.id)}" aria-current="${x.id === sessionId}">
-      <span class="dot" data-state="${x.host ? 'on' : 'wait'}"></span>
-      <span class="s-main"><b>${esc(sessionLabel(x))}</b><small>${esc(x.cmd || '')} · ${esc(x.cwd || '')}</small></span>
-      <span class="s-meta">${ago(x.created)}<br>${x.host ? plural(x.clients, 'viewer') : 'host away'}</span>
-    </button>`).join('');
-}
-
-$('#session-list').addEventListener('click', (e) => {
-  const id = e.target.closest('[data-id]')?.dataset.id;
+  const id = e.target.closest('[data-join]')?.dataset.join;
   if (id) attach(id);
 });
-$('#picker-close').addEventListener('click', () => { hidePicker(); if (!isTouch) term?.focus(); });
 
-if (token) openTerminal(); else showLogin();
+$('#command-list').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-cmd]');
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  $('#home-error').textContent = '';
+  const cwd = cwdInput.value.trim();
+  store.set('cwd', cwd);
+  try {
+    const x = await api('POST', '/api/instances', { command: btn.dataset.cmd, cwd: cwd || undefined });
+    attach(x.id);
+  } catch (err) {
+    $('#home-error').textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#home-close').addEventListener('click', () => { hideHome(); if (!isTouch) term?.focus(); });
+
+store.del('token'); store.del('session'); // left over from the password / rterm days
+openTerminal();

@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Remote Term</title>
+  <title>Remote Terminal</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
@@ -29,38 +29,30 @@
   </script>
 </head>
 <body>
-  <!-- Login -->
-  <section id="login" class="screen" hidden>
-    <form id="login-form" class="card" autocomplete="on">
-      <div class="mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 7 5 5-5 5"/><path d="M13 17h6"/></svg>
-      </div>
-      <h1>Remote Term</h1>
-      <p class="sub">Enter the password to open your session.</p>
-      <input type="text" name="username" value="remote-term" autocomplete="username" hidden>
-      <div class="field">
-        <input id="password" name="password" type="password" placeholder="Password" autocomplete="current-password" required autofocus>
-        <button type="button" id="reveal" class="ghost-icon" aria-label="Show password">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
-        </button>
-      </div>
-      <button type="submit" class="primary" id="login-btn">Unlock</button>
-      <p class="error" id="login-error" role="alert"></p>
-    </form>
-  </section>
-
-  <!-- Session picker -->
-  <section id="picker" class="screen" hidden>
-    <div class="card picker-card">
-      <div class="picker-head">
-        <h1>Sessions</h1>
-        <button type="button" id="picker-close" class="ghost-icon" aria-label="Back to terminal">
+  <!-- Home: running instances + commands -->
+  <section id="home" class="screen" hidden>
+    <div class="card home-card">
+      <div class="home-head">
+        <div class="mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 7 5 5-5 5"/><path d="M13 17h6"/></svg>
+        </div>
+        <h1>Remote Terminal</h1>
+        <button type="button" id="home-close" class="ghost-icon" aria-label="Back to terminal">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
       </div>
-      <p class="sub" id="picker-note"></p>
-      <div id="session-list" class="session-list"></div>
-      <p class="hint">Start another with <code>rterm</code> on your machine.</p>
+      <p class="sub" id="home-note"></p>
+
+      <h2>Running</h2>
+      <div id="instance-list" class="session-list"></div>
+
+      <h2>Start</h2>
+      <label class="cwd-field">
+        <span>in</span>
+        <input id="cwd" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="~">
+      </label>
+      <div id="command-list" class="commands"></div>
+      <p class="error" id="home-error" role="alert"></p>
     </div>
   </section>
 
@@ -89,11 +81,12 @@
               <button data-act="font+" aria-label="Larger">+</button>
             </div>
           </div>
-          <button class="menu-item" data-act="sessions" role="menuitem">Sessions <span class="count" id="session-count"></span></button>
+          <button class="menu-item" data-act="home" role="menuitem">Home</button>
           <button class="menu-item" data-act="keys" role="menuitem">Show key bar <span class="switch" id="keys-switch"></span></button>
           <button class="menu-item" data-act="fullscreen" id="fs-item" role="menuitem">Fullscreen</button>
+          <button class="menu-item" data-act="copy" role="menuitem">Copy text…</button>
+          <button class="menu-item" data-act="paste" role="menuitem">Paste</button>
           <button class="menu-item" data-act="redraw" role="menuitem">Redraw screen</button>
-          <button class="menu-item danger" data-act="logout" role="menuitem">Sign out</button>
         </div>
       </div>
 
@@ -104,6 +97,8 @@
 
     <nav id="keybar" aria-label="Special keys">
       <div class="keys">
+        <button data-action="copy">copy</button>
+        <button data-action="paste">paste</button>
         <button data-key="esc">esc</button>
         <button data-key="tab">tab</button>
         <button data-key="stab">⇧tab</button>
@@ -122,6 +117,19 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>
       </button>
     </nav>
+
+    <!-- Copy: the terminal's text in a plain, natively selectable view -->
+    <section id="copyview" hidden aria-label="Copy text">
+      <div class="copy-bar">
+        <span class="copy-title">Select text to copy</span>
+        <button id="copy-all" class="chip">Copy all</button>
+        <button id="copy-close" class="ghost-icon" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <pre id="copy-text"></pre>
+    </section>
+    <div id="toast" role="status" hidden></div>
 
     <!-- Compose sheet -->
     <div id="scrim" hidden></div>

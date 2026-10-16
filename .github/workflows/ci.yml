@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck install.sh docs/scripts/fake-tailscale.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run check
+
+  # Runs the real installer (from this checkout) on a clean machine, then starts the server.
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [system, download]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        if: matrix.node == 'system'
+        with:
+          node-version: 22
+      - name: Hide the runner's Node.js so the installer has to download one
+        if: matrix.node == 'download'
+        run: |
+          for n in $(which -a node); do sudo mv "$n" "$n.hidden"; done
+          ! command -v node
+      - name: install.sh
+        env:
+          REMOTE_TERMINAL_SOURCE: ${{ github.workspace }}
+        run: bash install.sh
+      - name: doctor
+        run: ~/.local/bin/remote-terminal-server doctor
+      - name: Start the server and open a terminal
+        run: |
+          ~/.local/bin/remote-terminal-server --no-serve --no-qr --port 12799 &
+          for i in $(seq 1 40); do curl -fsS http://127.0.0.1:12799/api/state >/dev/null && break; sleep 0.5; done
+          curl -fsS http://127.0.0.1:12799/api/state
+          curl -fsS http://127.0.0.1:12799/ | grep -q '<title>Remote Terminal</title>'
+          cat ~/.remote-terminal-server/commands.json
+          name=$(node -e 'console.log(Object.keys(require(process.argv[1]))[0])' ~/.remote-terminal-server/commands.json 2>/dev/null \
+            || ~/.remote-terminal-server/node/bin/node -e 'console.log(Object.keys(require(process.argv[1]))[0])' ~/.remote-terminal-server/commands.json)
+          res=$(curl -sS -w '\n%{http_code}' -X POST -H 'content-type: application/json' -H 'origin: http://127.0.0.1:12799' \
+            -d "{\"command\":\"$name\"}" http://127.0.0.1:12799/api/instances)
+          echo "$res"
+          test "$(echo "$res" | tail -n1)" = 200
+          # Cross-origin requests must be refused.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'origin: https://evil.example' \
+            -d '{"command":"bash"}' http://127.0.0.1:12799/api/instances)
+          test "$code" = 403
+          kill %1

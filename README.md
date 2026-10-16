@@ -1,55 +1,62 @@
-# Remote Term
+# Remote Terminal
 
-Lets you use a terminal on this machine (for example a running `claude` session) from your phone's browser.
+Use the terminals on your computer from your phone's browser: a shell, Claude Code, Codex, Cursor Agent, anything. It runs over [Tailscale](https://tailscale.com), so only your own devices can reach it.
 
+<p align="center">
+  <img src="docs/images/console-home.png" width="260" alt="Home page">
+  <img src="docs/images/console-terminal.png" width="260" alt="A terminal">
+  <img src="docs/images/console-compose.png" width="260" alt="Composing a command">
+</p>
+
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/naiemk/remote-terminal/main/install.sh | bash
+remote-terminal-server
 ```
- your terminal ── rterm (PTY) ──ws──▶ server 127.0.0.1:12700 ◀── tailscale serve (HTTPS) ◀── browser (xterm.js)
+
+Linux and macOS. The installer uses your Node.js 18.17+ or downloads its own copy. On Linux it needs a C++ compiler, `make` and `python3`.
+
+On the first run, `remote-terminal-server` checks for Tailscale, offers to run `tailscale serve` for you, and prints the address to open on your phone, with a QR code. Without Tailscale it still runs, but only this computer can open it.
+
+<p align="center"><img src="docs/images/cli-ready.png" width="640" alt="remote-terminal-server ready"></p>
+
+## Documentation
+
+**[naiemk.gitbook.io/remote-terminal](https://naiemk.gitbook.io/remote-terminal)** (source in [`docs/`](docs/README.md))
+
+* [Install](docs/getting-started/install.md) · [Set up Tailscale](docs/getting-started/tailscale.md) · [Connect from your phone](docs/getting-started/connect.md)
+* [Using the console](docs/guides/console.md) · [Commands](docs/guides/commands.md) · [Keep it running](docs/guides/keep-running.md)
+* [CLI](docs/reference/cli.md) · [Configuration](docs/reference/configuration.md) · [Security](docs/reference/security.md) · [Troubleshooting](docs/reference/troubleshooting.md)
+
+## Commands
+
+The **Start** buttons come from `~/.remote-terminal-server/commands.json`. Edit it with `remote-terminal-server edit`. Changes show up without a restart.
+
+```json
+{
+  "bash": "bash",
+  "claude": "claude",
+  "codex": "codex",
+  "api": { "cmd": "npm run dev", "cwd": "~/code/api" }
+}
 ```
 
-The server listens on `127.0.0.1:12700` only and is reached exclusively through Tailscale. See [Access (Tailscale only)](#access-tailscale-only).
+## Security
 
-- `server/`: HTTP and WebSocket relay. It serves the client, swaps the password for a JWT, and relays any number of sessions, keeping 512 KB of scrollback per session for clients that connect later.
-- `host/`: `rterm`. Each `rterm` is its own session. It runs a command in a PTY, mirrors it to your local terminal, and streams it to the server. Input from your keyboard and from the phone both go to the same PTY. The PTY size follows whichever side typed last.
-- `public/`: the web client. It is a full-screen xterm with a compose sheet (type or dictate), a key bar (esc, tab, ⇧tab, ^C, arrows…) and a status menu.
+There's no password. The server only listens on `127.0.0.1`, and `tailscale serve` (tailnet only) is the only way in. Never expose it with `tailscale funnel`. See [Security](docs/reference/security.md).
 
-## Run
+## Development
 
 ```bash
 npm install
-cp .env.example .env    # set PASSWORD, JWT_SECRET, HOST_TOKEN
-npm start               # server on 127.0.0.1:12700
-./bin/rterm claude      # in your terminal (no args = $SHELL)
-tailscale serve --bg 12700   # once; Tailscale remembers it
+npm start                 # ./bin/remote-terminal-server
+npm run check             # syntax check
+npm run screenshots       # regenerate docs/images (needs Chromium)
 ```
 
-Open `https://<machine>.<tailnet>.ts.net` on your phone (it must be on your tailnet). Use "Add to Home Screen" to get a full-screen app.
-
-## Multiple sessions
-
-Run as many `rterm`s as you like, in different terminals or directories:
-
-```bash
-rterm claude                      # labelled by its directory, e.g. "plaee"
-rterm --name api npm run dev      # or give it a name (also: RTERM_NAME=api)
-```
-
-- With one session running, the phone opens it directly. With several, it shows a picker; it reopens the last session you used if it's still running.
-- Switch with the status pill → **Sessions**. Each session keeps its own scrollback, viewers and PTY size.
-- A session ends when its command exits. If `rterm` just loses its connection (for example while the server restarts), it reconnects to the same session; one that doesn't come back within 10 minutes is dropped.
-- Programs running inside `rterm` don't see the variables from `.env` (the password and tokens).
-
-## Access (Tailscale only)
-
-This gives whoever reaches it a shell on your machine, so it must only be used through Tailscale:
-
-- The server always binds to `127.0.0.1`. This is hardcoded; a `BIND` value in `.env` is ignored with a warning. Nothing on your LAN, public Wi-Fi or the internet can connect to the port directly.
-- `tailscale serve --bg 12700` is the only way in. It gives you HTTPS with a valid certificate, and only devices on your tailnet can reach it. Check with `tailscale serve status`, which should show `(tailnet only)` and `proxy http://127.0.0.1:12700`.
-- Never use `tailscale funnel` for this. Funnel publishes the service to the public internet.
-- Don't share this machine with other tailnet users, and keep the password. Tailscale limits who can reach the server; the password still guards against other devices on your tailnet and other users on this machine.
-- `rterm` connects over localhost (`ws://127.0.0.1:$PORT`), so it doesn't go through Tailscale.
-
-## Tips
-
-- Compose: Ctrl/Cmd+K on desktop. Enter sends; Shift+Enter adds a new line. Multi-line text is sent as a bracketed paste, so Claude Code treats it as one prompt.
-- On phones, tapping the terminal doesn't bring up the keyboard. Use the ⌨ key to type into the terminal directly.
-- `?webgl` turns on the GPU renderer.
+* `bin/remote-terminal-server`: the CLI, including Tailscale detection and the first-run setup.
+* `server/`: serves the web client, starts commands in PTYs, and relays each one to any number of browsers. It keeps 512 KB of output per terminal for viewers who join later.
+* `public/`: the web client, built on xterm.js.
+* `install.sh`: the `curl | bash` installer.
+* `docs/`: the GitBook site. `.github/workflows/docs.yml` publishes it on every push to `main`.
