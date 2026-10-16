@@ -1,0 +1,50 @@
+# Publishes docs/ to GitBook whenever it changes on main.
+#
+# Setup (once):
+#   1. In GitBook, create a space for the docs.
+#   2. Repository secret GITBOOK_TOKEN: a GitBook API token (https://app.gitbook.com/account/developer).
+#   3. Repository variable GITBOOK_SPACE_ID: the space ID (the part after /s/ in the space's URL).
+#   4. Only if this repository is private: secret GITBOOK_GIT_TOKEN, a fine-grained GitHub token with
+#      read-only "Contents" access to this repository, so GitBook can fetch it.
+#
+# Alternatively, connect the space with GitBook's GitHub Git Sync app; then this workflow isn't needed.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**', '.gitbook.yaml', '.github/workflows/docs.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: gitbook
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    if: vars.GITBOOK_SPACE_ID != ''
+    steps:
+      - name: Import into GitBook
+        env:
+          GITBOOK_TOKEN: ${{ secrets.GITBOOK_TOKEN }}
+          GITBOOK_SPACE_ID: ${{ vars.GITBOOK_SPACE_ID }}
+          GIT_TOKEN: ${{ secrets.GITBOOK_GIT_TOKEN }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$GITBOOK_TOKEN" || { echo "::error::Set the GITBOOK_TOKEN secret"; exit 1; }
+          url="https://github.com/$REPO.git"
+          [ -n "$GIT_TOKEN" ] && url="https://x-access-token:$GIT_TOKEN@github.com/$REPO.git"
+          body=$(jq -n --arg url "$url" --arg ref "$REF" \
+            --arg tree "https://github.com/$REPO/blob/$SHA/" --arg commit "https://github.com/$REPO/commit/" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{url: $url, ref: $ref, repoTreeURL: $tree, repoCommitURL: $commit, timestamp: $ts, force: true}')
+          code=$(curl -sS -o response.txt -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $GITBOOK_TOKEN" -H 'Content-Type: application/json' \
+            -d "$body" "https://api.gitbook.com/v1/spaces/$GITBOOK_SPACE_ID/git/import")
+          cat response.txt; echo
+          if [ "$code" -ge 300 ]; then echo "::error::GitBook import failed (HTTP $code)"; exit 1; fi
+          echo "Import queued; GitBook publishes it in the background."

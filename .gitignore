@@ -1,2 +1,4 @@
 node_modules
 .env
+# old location; now ~/.remote-terminal-server/commands.json
+/commands.json

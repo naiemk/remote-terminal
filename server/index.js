@@ -1,38 +1,45 @@
-// Remote Term server: serves the web client, issues JWTs, and relays
-// a single terminal session between the local host process and web clients.
-import 'dotenv/config';
+// remote-terminal-server: serves the web client, starts terminal instances from commands.json
+// in PTYs, and relays each one to any number of web clients.
+//
+// No password: it only listens on 127.0.0.1 and is reached through `tailscale serve`.
+// What stands in for auth is checkRequest() below, which keeps other websites (and DNS
+// rebinding) from driving it through your own browser.
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import dotenv from 'dotenv';
+import pty from 'node-pty';
 import { WebSocketServer } from 'ws';
-import jwt from 'jsonwebtoken';
 import { isAutoResponse } from '../shared/input.js';
+import { ensureConfig } from './config.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const VENDOR_DIR = path.join(ROOT, 'node_modules', '@xterm');
+const { CONFIG_DIR, COMMANDS_FILE, ENV_FILE } = ensureConfig();
+// ~/.remote-terminal-server/.env, then a .env next to the code (for development). First one wins.
+const { parsed: dotenvVars = {} } = dotenv.config({ path: [ENV_FILE, path.join(ROOT, '.env')], quiet: true });
 
 const PORT = Number(process.env.PORT || 12700);
 // Loopback only, on purpose: the server is reached exclusively through `tailscale serve`,
 // never directly from the LAN or the internet. Not configurable.
 const BIND = '127.0.0.1';
 if (process.env.BIND && process.env.BIND !== BIND) {
-  console.warn(`Ignoring BIND=${process.env.BIND}: remote-term only listens on ${BIND} (expose it with tailscale serve).`);
+  console.warn(`Ignoring BIND=${process.env.BIND}: remote-terminal-server only listens on ${BIND} (expose it with tailscale serve).`);
 }
-const { PASSWORD, JWT_SECRET, HOST_TOKEN } = process.env;
-const TOKEN_TTL = process.env.TOKEN_TTL || '30d';
+const SHELL = process.env.SHELL || '/bin/bash';
+const DEFAULT_CWD = expandHome(process.env.DEFAULT_CWD || os.homedir());
 const SCROLLBACK_BYTES = 512 * 1024;
-
-for (const [k, v] of Object.entries({ PASSWORD, JWT_SECRET, HOST_TOKEN })) {
-  if (!v) { console.error(`Missing ${k} in .env`); process.exit(1); }
-}
 
 // ---------- helpers ----------
 
-const sha = (s) => crypto.createHash('sha256').update(String(s)).digest();
-const safeEqual = (a, b) => crypto.timingSafeEqual(sha(a), sha(b));
+function expandHome(p) {
+  return p === '~' || p.startsWith('~/') ? path.join(os.homedir(), p.slice(1)) : p;
+}
+const tildify = (p) => (p === os.homedir() || p.startsWith(os.homedir() + '/') ? '~' + p.slice(os.homedir().length) : p);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript',
@@ -53,22 +60,10 @@ function serveFile(res, baseDir, rel) {
     res.writeHead(200, {
       'content-type': MIME[path.extname(file)] || 'application/octet-stream',
       'cache-control': 'no-cache',
+      'x-frame-options': 'DENY',
     });
     fs.createReadStream(file).pipe(res);
   });
-}
-
-// Naive per-IP brute-force protection: 5 failures => locked for a minute.
-const failures = new Map();
-function isLocked(ip) {
-  const f = failures.get(ip);
-  return f && f.count >= 5 && Date.now() - f.last < 60_000;
-}
-function recordFailure(ip) {
-  const f = failures.get(ip) || { count: 0, last: 0 };
-  if (Date.now() - f.last > 60_000) f.count = 0;
-  f.count++; f.last = Date.now();
-  failures.set(ip, f);
 }
 
 function readBody(req, limit = 4096) {
@@ -80,192 +75,198 @@ function readBody(req, limit = 4096) {
   });
 }
 
+// Only answer requests addressed to this machine by a name we expect (blocks DNS rebinding), and
+// only take actions (API calls, WebSockets) from our own page: browsers let any site send those
+// cross-origin, and without a password that would mean any site could run commands here.
+const ALLOWED_HOSTS = (process.env.ALLOWED_HOSTS || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+function hostAllowed(host) {
+  const name = (host || '').toLowerCase().replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  return ['localhost', '127.0.0.1', '::1'].includes(name) || name.endsWith('.ts.net') || ALLOWED_HOSTS.includes(name);
+}
+function checkRequest(req, action) {
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  if (!hostAllowed(host)) return 'unexpected host';
+  if (!action) return null;
+  let origin = null;
+  try { origin = new URL(req.headers.origin).host; } catch {}
+  return origin === host ? null : 'cross-origin request refused';
+}
+
+// ---------- commands ----------
+
+// ~/.remote-terminal-server/commands.json: { "name": "command line" } or { "name": { "cmd": "…", "cwd": "~/dir" } }.
+// Re-read on every use, so edits apply without a restart.
+function loadCommands() {
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(COMMANDS_FILE, 'utf8')); }
+  catch (err) {
+    if (err.code !== 'ENOENT') console.error(`${COMMANDS_FILE}: ${err.message}`);
+    raw = { bash: SHELL };
+  }
+  const out = {};
+  for (const [name, v] of Object.entries(raw)) {
+    const spec = typeof v === 'string' ? { cmd: v } : v;
+    if (spec && typeof spec.cmd === 'string' && spec.cmd.trim()) out[name] = { cmd: spec.cmd.trim(), cwd: spec.cwd };
+  }
+  return out;
+}
+
+// The commands get your normal environment, minus what came from .env.
+function childEnv() {
+  const env = { ...process.env, COLORTERM: 'truecolor', REMOTE_TERM: '1' };
+  for (const k of Object.keys(dotenvVars)) delete env[k];
+  return env;
+}
+
+// ---------- instances ----------
+
+const instances = new Map();
+
+function instanceInfo(x) {
+  return { id: x.id, command: x.command, cmd: x.cmd, cwd: tildify(x.cwd), created: x.created, clients: x.clients.size };
+}
+
+function startInstance(command, cwdInput) {
+  const spec = loadCommands()[command];
+  if (!spec) throw new Error(`Unknown command "${command}"`);
+  const cwd = path.resolve(expandHome(String(cwdInput || spec.cwd || DEFAULT_CWD)));
+  if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`No such directory: ${tildify(cwd)}`);
+
+  const x = {
+    id: crypto.randomBytes(6).toString('hex'),
+    command, cmd: spec.cmd, cwd,
+    created: Date.now(),
+    clients: new Set(),
+    active: null,        // client that last typed or resized; it owns the PTY size and its query replies go through
+    scrollback: [],      // Buffer chunks, replayed to clients that join later
+    scrollbackSize: 0,
+    size: { cols: 100, rows: 30 },
+  };
+  // A login shell, so PATH and friends match a normal terminal (mise, nvm, ~/.local/bin…).
+  x.pty = pty.spawn(SHELL, ['-lc', `exec ${spec.cmd}`], {
+    name: 'xterm-256color', cols: x.size.cols, rows: x.size.rows, cwd, env: childEnv(),
+  });
+  x.pty.onData((d) => {
+    const buf = Buffer.from(d, 'utf8');
+    x.scrollback.push(buf);
+    x.scrollbackSize += buf.length;
+    while (x.scrollbackSize > SCROLLBACK_BYTES && x.scrollback.length > 1) x.scrollbackSize -= x.scrollback.shift().length;
+    for (const c of x.clients) if (c.readyState === 1) c.send(buf, { binary: true });
+  });
+  x.pty.onExit(({ exitCode, signal }) => {
+    clearTimeout(x.killTimer);
+    instances.delete(x.id);
+    const how = signal ? `signal ${signal}` : `code ${exitCode}`;
+    console.log(`instance ${x.id} (${command}) exited with ${how}`);
+    for (const c of x.clients) c.close(4404, `exited with ${how}`);
+  });
+  instances.set(x.id, x);
+  console.log(`instance ${x.id} started: ${spec.cmd} in ${cwd}`);
+  return x;
+}
+
+function killInstance(x) {
+  x.pty.kill('SIGHUP');
+  clearTimeout(x.killTimer);
+  x.killTimer = setTimeout(() => { try { x.pty.kill('SIGKILL'); } catch {} }, 3000);
+}
+
+function resize(x, cols, rows) {
+  if (cols === x.size.cols && rows === x.size.rows) return;
+  x.size = { cols, rows };
+  try { x.pty.resize(cols, rows); } catch {}
+}
+
+function notifyStatus(x) {
+  const msg = JSON.stringify({ t: 'status', ...instanceInfo(x) });
+  for (const c of x.clients) if (c.readyState === 1) c.send(msg);
+}
+
 // ---------- http ----------
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
+  const isApi = url.pathname.startsWith('/api/');
+  const refused = checkRequest(req, isApi && req.method !== 'GET');
+  if (refused) return sendJson(res, 403, { error: refused });
 
-  if (req.method === 'POST' && url.pathname === '/api/login') {
-    const ip = req.socket.remoteAddress;
-    if (isLocked(ip)) return sendJson(res, 429, { error: 'Too many attempts. Wait a minute.' });
-    let password = '';
-    try { password = JSON.parse(await readBody(req)).password || ''; } catch {}
-    if (!safeEqual(password, PASSWORD)) {
-      recordFailure(ip);
-      await new Promise((r) => setTimeout(r, 400));
-      return sendJson(res, 401, { error: 'Wrong password' });
-    }
-    failures.delete(ip);
-    const token = jwt.sign({ sub: 'remote-term' }, JWT_SECRET, { expiresIn: TOKEN_TTL });
-    return sendJson(res, 200, { token });
+  if (req.method === 'GET' && url.pathname === '/api/state') {
+    const commands = Object.entries(loadCommands()).map(([name, s]) => ({ name, cmd: s.cmd, cwd: s.cwd }));
+    const list = [...instances.values()].map(instanceInfo).sort((a, b) => a.created - b.created);
+    return sendJson(res, 200, { commands, instances: list, defaultCwd: tildify(DEFAULT_CWD) });
   }
 
-  if (req.method === 'GET' && (url.pathname === '/api/me' || url.pathname === '/api/sessions')) {
-    const bearer = (req.headers.authorization || '').replace(/^Bearer /, '');
-    try { jwt.verify(bearer, JWT_SECRET); } catch { return sendJson(res, 401, { error: 'unauthorized' }); }
-    if (url.pathname === '/api/me') return sendJson(res, 200, { ok: true });
-    return sendJson(res, 200, { sessions: [...sessions.values()].map(sessionInfo).sort((x, y) => x.created - y.created) });
+  if (req.method === 'POST' && url.pathname === '/api/instances') {
+    let body = {};
+    try { body = JSON.parse(await readBody(req)); } catch {}
+    try { return sendJson(res, 200, instanceInfo(startInstance(body.command, body.cwd))); }
+    catch (err) { return sendJson(res, 400, { error: err.message }); }
   }
 
+  const m = url.pathname.match(/^\/api\/instances\/([\w-]+)$/);
+  if (req.method === 'DELETE' && m) {
+    const x = instances.get(m[1]);
+    if (!x) return sendJson(res, 404, { error: 'no such instance' });
+    killInstance(x);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (isApi) return sendJson(res, 404, { error: 'not found' });
   if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
   if (url.pathname.startsWith('/vendor/')) return serveFile(res, VENDOR_DIR, url.pathname.slice(8));
   if (url.pathname === '/') return serveFile(res, PUBLIC_DIR, 'index.html');
   return serveFile(res, PUBLIC_DIR, url.pathname);
 });
 
-// ---------- session relay ----------
-
-// One session per rterm process, keyed by the id the host picks at startup. A host that drops
-// (network blip, server restart) reconnects with the same id and picks its session back up;
-// one that exits cleanly ends it. Sessions whose host never comes back are dropped after a while.
-const ORPHAN_TTL = 10 * 60_000;
-const sessions = new Map();
-
-function getSession(id) {
-  let s = sessions.get(id);
-  if (!s) {
-    s = {
-      id,
-      host: null,          // ws of the host process
-      meta: null,          // { name, hostname, cmd, cwd, cols, rows }
-      clients: new Set(),
-      active: null,        // client that last typed or resized; only its query replies are forwarded
-      scrollback: [],      // Buffer chunks
-      scrollbackSize: 0,
-      created: Date.now(),
-      orphanTimer: null,
-    };
-    sessions.set(id, s);
-  }
-  return s;
-}
-
-function sessionInfo(s) {
-  const { name, hostname, cmd, cwd } = s.meta || {};
-  return { id: s.id, name, hostname, cmd, cwd, host: !!s.host, clients: s.clients.size, created: s.created };
-}
-
-function endSession(s, reason) {
-  clearTimeout(s.orphanTimer);
-  sessions.delete(s.id);
-  for (const c of s.clients) c.close(4404, reason);
-  console.log(`session ${s.id} ended (${reason})`);
-}
-
-function pushScrollback(s, buf) {
-  s.scrollback.push(buf);
-  s.scrollbackSize += buf.length;
-  while (s.scrollbackSize > SCROLLBACK_BYTES && s.scrollback.length > 1) {
-    s.scrollbackSize -= s.scrollback.shift().length;
-  }
-}
-
-function broadcast(s, msg, binary = false) {
-  for (const c of s.clients) if (c.readyState === 1) c.send(msg, { binary });
-}
-
-function statusMsg(s) {
-  return JSON.stringify({ t: 'status', id: s.id, host: !!s.host, meta: s.meta, clients: s.clients.size });
-}
-
-function notifyStatus(s) {
-  broadcast(s, statusMsg(s));
-  if (s.host?.readyState === 1) {
-    s.host.send(JSON.stringify({ t: 'clients', n: s.clients.size }));
-  }
-}
+// ---------- websocket ----------
 
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
-const SESSION_ID = /^[\w-]{4,64}$/;
 
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://x');
-  const token = url.searchParams.get('token') || '';
-  const id = url.searchParams.get('session') || (url.pathname === '/ws/host' ? 'default' : ''); // pre-multi-session rterm
-  let role = null;
-
-  if (url.pathname === '/ws/host' && safeEqual(token, HOST_TOKEN) && SESSION_ID.test(id)) role = 'host';
-  if (url.pathname === '/ws/client') {
-    try { jwt.verify(token, JWT_SECRET); role = 'client'; } catch {}
-  }
-  if (!role) {
-    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+  const refused = url.pathname === '/ws' ? checkRequest(req, true) : 'not found';
+  if (refused) {
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
     return socket.destroy();
   }
   wss.handleUpgrade(req, socket, head, (ws) => {
     ws.isAlive = true;
     ws.on('pong', () => (ws.isAlive = true));
-    role === 'host' ? onHost(ws, id) : onClient(ws, id);
+    onClient(ws, url.searchParams.get('id') || '');
   });
 });
 
-function onHost(ws, id) {
-  const s = getSession(id);
-  clearTimeout(s.orphanTimer);
-  if (s.host) s.host.close(4000, 'replaced by a new host');
-  s.host = ws;
-  // The host replays nothing on reconnect, so start viewers from a clean screen.
-  s.scrollback = [];
-  s.scrollbackSize = 0;
-  broadcast(s, JSON.stringify({ t: 'reset' }));
-  console.log(`host connected (session ${id})`);
-
-  ws.on('message', (data, isBinary) => {
-    if (isBinary) {
-      pushScrollback(s, data);
-      return broadcast(s, data, true);
-    }
-    let msg; try { msg = JSON.parse(data); } catch { return; }
-    if (msg.t === 'hello' || msg.t === 'size') {
-      s.meta = { ...s.meta, ...msg, t: undefined };
-      notifyStatus(s);
-    } else if (msg.t === 'exit') {
-      s.exited = true;
-    }
-  });
-
-  ws.on('close', (code) => {
-    if (s.host !== ws) return;
-    s.host = null;
-    if (s.exited || code === 1000) return endSession(s, 'exited');
-    console.log(`host disconnected (session ${id})`);
-    s.orphanTimer = setTimeout(() => endSession(s, 'host gone'), ORPHAN_TTL);
-    notifyStatus(s);
-  });
-  notifyStatus(s);
-}
-
 function onClient(ws, id) {
-  const s = sessions.get(id);
-  if (!s) return ws.close(4404, 'no such session');
-  s.clients.add(ws);
-  console.log(`client connected (session ${id}, ${s.clients.size})`);
-  ws.send(statusMsg(s));
-  if (s.scrollback.length) ws.send(Buffer.concat(s.scrollback), { binary: true });
+  const x = instances.get(id);
+  if (!x) return ws.close(4404, 'no such instance');
+  x.clients.add(ws);
+  if (x.scrollback.length) ws.send(Buffer.concat(x.scrollback), { binary: true });
+  notifyStatus(x);
 
   ws.on('message', (data, isBinary) => {
-    if (isBinary || s.host?.readyState !== 1) return;
+    if (isBinary || !instances.has(x.id)) return;
     let msg; try { msg = JSON.parse(data); } catch { return; }
     if (msg.t === 'in' && typeof msg.d === 'string') {
+      // Terminal query replies only count from the active client, and never make it active.
       if (isAutoResponse(msg.d)) {
-        if (s.active && s.active !== ws) return;
+        if (x.active && x.active !== ws) return;
       } else {
-        s.active = ws;
+        x.active = ws;
+        if (ws.size) resize(x, ws.size.cols, ws.size.rows);
       }
-      s.host.send(JSON.stringify({ t: 'in', d: msg.d }));
+      x.pty.write(msg.d);
     } else if (msg.t === 'resize' && msg.cols > 0 && msg.rows > 0) {
-      s.active = ws;
-      s.host.send(JSON.stringify({ t: 'resize', cols: msg.cols | 0, rows: msg.rows | 0 }));
+      ws.size = { cols: Math.min(msg.cols | 0, 1000), rows: Math.min(msg.rows | 0, 500) };
+      x.active = ws;
+      resize(x, ws.size.cols, ws.size.rows);
     }
   });
 
   ws.on('close', () => {
-    s.clients.delete(ws);
-    if (s.active === ws) s.active = null;
-    console.log(`client disconnected (session ${id}, ${s.clients.size})`);
-    notifyStatus(s);
+    x.clients.delete(ws);
+    if (x.active === ws) x.active = null;
+    notifyStatus(x);
   });
-  notifyStatus(s);
 }
 
 // Keep connections alive through proxies / mobile networks.
@@ -277,4 +278,19 @@ setInterval(() => {
   }
 }, 25_000);
 
-server.listen(PORT, BIND, () => console.log(`remote-term server on http://${BIND}:${PORT}`));
+// Instances are children of the server; take them down with it.
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    for (const x of instances.values()) try { x.pty.kill('SIGHUP'); } catch {}
+    process.exit(0);
+  });
+}
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') console.error(`Port ${PORT} is already in use. Is remote-terminal-server already running? Pick another with --port.`);
+  else console.error(err.message);
+  process.exit(1);
+});
+export const listening = new Promise((resolve) => server.listen(PORT, BIND, () => {
+  resolve({ port: PORT, configDir: CONFIG_DIR });
+}));

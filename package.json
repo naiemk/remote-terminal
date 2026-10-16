@@ -1,17 +1,30 @@
 {
-  "name": "remote-term",
+  "name": "remote-terminal-server",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server/index.js",
-    "term": "node host/index.js"
-  },
-  "keywords": [],
-  "author": "",
+  "description": "Use the terminals on your computer (a shell, Claude Code, Codex…) from your phone browser, over Tailscale",
   "license": "ISC",
   "type": "module",
+  "bin": {
+    "remote-terminal-server": "bin/remote-terminal-server"
+  },
+  "files": [
+    "bin",
+    "server",
+    "shared",
+    "public"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/naiemk/remote-terminal.git"
+  },
+  "scripts": {
+    "start": "node bin/remote-terminal-server",
+    "check": "node --check server/index.js && node --check server/config.js && node --check server/tailscale.js && node --check bin/remote-terminal-server && node --check public/app.js",
+    "screenshots": "node docs/scripts/screenshots.mjs"
+  },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-unicode11": "^0.9.0",
@@ -19,11 +32,14 @@
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "dotenv": "^18.0.7",
-    "jsonwebtoken": "^9.0.3",
     "node-pty": "^1.1.0",
+    "qrcode-terminal": "^0.12.0",
     "ws": "^8.22.0"
   },
-  "bin": {
-    "rterm": "bin/rterm"
+  "allowScripts": {
+    "node-pty@1.1.0": true
+  },
+  "devDependencies": {
+    "playwright-core": "^1.64.1"
   }
 }

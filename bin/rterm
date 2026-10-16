@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# Run a command (default: $SHELL) in a shared terminal streamed to Remote Term.
-exec node "$(dirname "$(readlink -f "$0")")/../host/index.js" "$@"
