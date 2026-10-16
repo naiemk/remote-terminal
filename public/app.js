@@ -169,8 +169,14 @@ function connect() {
     retry = 0;
     doFit();
   };
+  // The server starts every connection by replaying the scrollback, so after a reconnect
+  // clear what's already on screen first, or everything shows up twice.
+  let replay = true;
   sock.onmessage = (e) => {
-    if (e.data instanceof ArrayBuffer) return term.write(new Uint8Array(e.data), liftSoon);
+    if (e.data instanceof ArrayBuffer) {
+      if (replay) { replay = false; term.reset(); }
+      return term.write(new Uint8Array(e.data), liftSoon);
+    }
     let msg; try { msg = JSON.parse(e.data); } catch { return; }
     if (msg.t === 'status') onStatus(msg);
   };
