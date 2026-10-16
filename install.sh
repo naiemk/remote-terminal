@@ -136,6 +136,9 @@ main() {
     tail -n 30 "$npm_log" >&2
     die "npm install failed (full log above)."
   fi
+  # node-pty's prebuilt macOS helper can lose its executable bit in the package, and then every
+  # terminal fails to start with "posix_spawnp failed".
+  chmod +x "$tmp"/app/node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true
   "$NODE" -e "require('$tmp/app/node_modules/node-pty')" 2>/dev/null || die "The terminal module (node-pty) didn't build for $("$NODE" -v)."
 
   # Swap the new version in; the old one is kept until the new one is in place.

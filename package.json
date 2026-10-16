@@ -23,7 +23,8 @@
   "scripts": {
     "start": "node bin/remote-terminal-server",
     "check": "node --check server/index.js && node --check server/config.js && node --check server/tailscale.js && node --check bin/remote-terminal-server && node --check public/app.js",
-    "screenshots": "node docs/scripts/screenshots.mjs"
+    "screenshots": "node docs/scripts/screenshots.mjs",
+    "postinstall": "node -e \"for (const a of ['darwin-arm64','darwin-x64']) try { require('fs').chmodSync('node_modules/node-pty/prebuilds/'+a+'/spawn-helper', 0o755) } catch {}\""
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

@@ -49,8 +49,13 @@ jobs:
           for i in $(seq 1 40); do curl -fsS http://127.0.0.1:12799/api/state >/dev/null && break; sleep 0.5; done
           curl -fsS http://127.0.0.1:12799/api/state
           curl -fsS http://127.0.0.1:12799/ | grep -q '<title>Remote Terminal</title>'
-          curl -fsS -X POST -H 'content-type: application/json' -H 'origin: http://127.0.0.1:12799' \
-            -d '{"command":"'"$(basename "$SHELL")"'"}' http://127.0.0.1:12799/api/instances
+          cat ~/.remote-terminal-server/commands.json
+          name=$(node -e 'console.log(Object.keys(require(process.argv[1]))[0])' ~/.remote-terminal-server/commands.json 2>/dev/null \
+            || ~/.remote-terminal-server/node/bin/node -e 'console.log(Object.keys(require(process.argv[1]))[0])' ~/.remote-terminal-server/commands.json)
+          res=$(curl -sS -w '\n%{http_code}' -X POST -H 'content-type: application/json' -H 'origin: http://127.0.0.1:12799' \
+            -d "{\"command\":\"$name\"}" http://127.0.0.1:12799/api/instances)
+          echo "$res"
+          test "$(echo "$res" | tail -n1)" = 200
           # Cross-origin requests must be refused.
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'origin: https://evil.example' \
             -d '{"command":"bash"}' http://127.0.0.1:12799/api/instances)
