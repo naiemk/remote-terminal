@@ -143,7 +143,8 @@ function startInstance(command, cwdInput) {
     size: { cols: 100, rows: 30 },
   };
   // A login shell, so PATH and friends match a normal terminal (mise, nvm, ~/.local/bin…).
-  x.pty = pty.spawn(SHELL, ['-lc', `exec ${spec.cmd}`], {
+  // No `exec` prefix: it breaks `FOO=1 cmd` and `a; b`, and bash/zsh already exec a lone simple command.
+  x.pty = pty.spawn(SHELL, ['-lc', spec.cmd], {
     name: 'xterm-256color', cols: x.size.cols, rows: x.size.rows, cwd, env: childEnv(),
   });
   x.pty.onData((d) => {
