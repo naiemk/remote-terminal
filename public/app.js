@@ -73,7 +73,8 @@ async function createTerminal() {
 
   new ResizeObserver(() => scheduleFit()).observe($('#term'));
   installScrolling();
-  if (location.search.includes('debug')) window.__rt = { term, get scrollPx() { return scrollPx; }, get shift() { return shiftApplied; } };
+  installSelection();
+  if (location.search.includes('debug')) window.__rt = { term, cellAt, get sel() { return sel; }, get scrollPx() { return scrollPx; }, get shift() { return shiftApplied; } };
   applyFontSize();
 }
 
@@ -130,7 +131,7 @@ function installScrolling() {
 
   // Move the terminal to `px`: whole lines through xterm, the rest as a pixel shift.
   // Past either end (iOS bounce) the shift just keeps going, like a native page.
-  term.onRender(() => applyShift()); // after xterm drew the new line, in the same frame
+  term.onRender(() => { applyShift(); placeSelectionUi(); }); // after xterm drew the new line, in the same frame
   term.onScroll((y) => {
     if (y === ourLine) return;
     // xterm moved by itself (output while at the bottom, typing, trimmed history): follow it.
@@ -190,8 +191,8 @@ function installScrolling() {
       bubbles: true, cancelable: true,
     }));
   }, { passive: true });
-  // A tap still reaches the terminal (focus for typing in ⌨ mode).
-  scroller.addEventListener('click', () => { if (direct) term.focus(); });
+  // Taps select text (see selection below); in ⌨ mode they also keep the keyboard up.
+  scroller.addEventListener('click', (e) => { onTap(e); if (direct) term.focus(); });
 }
 
 function moveTo(px, fromScroller = false) {
@@ -215,6 +216,7 @@ function applyShift() {
   shiftApplied = pendingShift;
   screenEl.style.transform = shiftApplied ? `translateY(${-shiftApplied}px)` : '';
   $('#term').classList.toggle('scrolled', !atBottom());
+  placeSelectionUi();
 }
 
 // Keep the native layer the right size and, unless a finger is on it, at the right place.
@@ -240,6 +242,171 @@ function syncScroller(force = false) {
 function setTop(v) {
   scroller.scrollTop = v;
   echoTop = scroller.scrollTop;
+}
+
+// ================= selection =================
+//
+// Phones: tap a word to select it, tap three times for the whole paragraph, then drag the
+// handles at either end to change it. The view scrolls when a handle gets near the top or
+// bottom. The bar above the selection copies it. Computers: xterm's own mouse selection
+// (drag, double-click a word) plus triple-click for the paragraph.
+
+const DEFAULT_SEPARATORS = ' ()[]{}\',"`';
+let sel = null;                  // { start: {row, col}, end: {row, col} }: buffer rows, end exclusive
+let taps = { n: 0, t: 0, x: 0, y: 0 };
+let dragging = null;             // { which: 'start' | 'end', x, y } while a handle is held
+
+function cellAt(x, y) {
+  const r = screenEl.getBoundingClientRect(), buf = term.buffer.active;
+  const col = Math.max(0, Math.min(term.cols - 1, Math.floor((x - r.left) / (r.width / term.cols))));
+  const row = buf.viewportY + Math.floor((y - r.top) / cellH());
+  return { col, row: Math.max(0, Math.min(buf.length - 1, row)) };
+}
+
+// A row together with the rows it wraps onto, as one string of `cols`-wide pieces.
+function logicalLine(row) {
+  const buf = term.buffer.active;
+  let start = row, end = row;
+  while (start > 0 && buf.getLine(start)?.isWrapped) start--;
+  while (buf.getLine(end + 1)?.isWrapped) end++;
+  let text = '';
+  for (let r = start; r <= end; r++) text += (buf.getLine(r)?.translateToString(false) ?? '').padEnd(term.cols).slice(0, term.cols);
+  return { start, end, text };
+}
+const posIn = (line, i) => ({ row: line.start + Math.floor(i / term.cols), col: i % term.cols });
+const indexIn = (line, cell) => (cell.row - line.start) * term.cols + cell.col;
+const isWordChar = (ch) => !!ch && !/\s/.test(ch) && !(term.options.wordSeparator ?? DEFAULT_SEPARATORS).includes(ch);
+
+function selectWord(cell) {
+  const line = logicalLine(cell.row), i = indexIn(line, cell);
+  if (!isWordChar(line.text[i])) return false;
+  let a = i, b = i + 1;
+  while (a > 0 && isWordChar(line.text[a - 1])) a--;
+  while (b < line.text.length && isWordChar(line.text[b])) b++;
+  setSelection(posIn(line, a), posIn(line, b));
+  return true;
+}
+
+// Consecutive non-blank lines around the cell.
+function selectParagraph(cell, ui = true) {
+  const blank = (l) => !l.text.trim();
+  let first = logicalLine(cell.row);
+  if (blank(first)) return false;
+  let last = first;
+  for (let l; first.start > 0 && !blank(l = logicalLine(first.start - 1));) first = l;
+  for (let l; last.end < term.buffer.active.length - 1 && !blank(l = logicalLine(last.end + 1));) last = l;
+  setSelection({ row: first.start, col: 0 }, posIn(last, last.text.trimEnd().length), ui);
+  return true;
+}
+
+function setSelection(a, b, ui = true) {
+  if (a.row > b.row || (a.row === b.row && a.col > b.col)) [a, b] = [b, a];
+  const length = (b.row - a.row) * term.cols + b.col - a.col;
+  if (length <= 0) return;
+  sel = ui ? { start: a, end: b } : null;
+  term.select(a.col, a.row, length);
+  placeSelectionUi();
+}
+
+function clearSelection() {
+  sel = null;
+  term.clearSelection();
+  placeSelectionUi();
+}
+
+function onTap(e) {
+  const now = performance.now();
+  const again = now - taps.t < 450 && Math.hypot(e.clientX - taps.x, e.clientY - taps.y) < 30;
+  taps = { n: Math.max(e.detail || 1, again ? taps.n + 1 : 1), t: now, x: e.clientX, y: e.clientY };
+  const cell = cellAt(e.clientX, e.clientY);
+  if (taps.n >= 3) { selectParagraph(cell); return; }
+  if (taps.n === 1 && !selectWord(cell)) clearSelection();
+}
+
+// Handles and the copy bar follow the selection as the terminal scrolls.
+function placeSelectionUi() {
+  const handles = [$('#sel-start'), $('#sel-end')], bar = $('#sel-bar');
+  if (!sel || !screenEl) { handles.forEach((h) => (h.hidden = true)); bar.hidden = true; return; }
+  const t = $('#term').getBoundingClientRect(), r = screenEl.getBoundingClientRect();
+  const cw = r.width / term.cols, h = cellH(), top = r.top - t.top, left = r.left - t.left;
+  const vY = term.buffer.active.viewportY;
+  const sx = left + sel.start.col * cw, sy = top + (sel.start.row - vY) * h;
+  const ex = left + sel.end.col * cw, ey = top + (sel.end.row - vY + 1) * h;
+  const visible = (y) => y > -h && y < t.height + h;
+  place(handles[0], sx, sy, visible(sy + h));
+  place(handles[1], ex, ey - h, visible(ey - h)); // its caret covers the last selected row
+  // The bar sits above the selection, or below it when there's no room.
+  bar.hidden = false;
+  const bw = bar.offsetWidth, bh = bar.offsetHeight;
+  const by = sy - bh - 14 > 8 ? sy - bh - 14 : Math.min(ey + 22, t.height - bh - 8);
+  bar.style.transform = `translate(${Math.max(8, Math.min(t.width - bw - 8, (sx + ex) / 2 - bw / 2))}px, ${Math.max(8, by)}px)`;
+  function place(el, x, y, show) {
+    el.hidden = !show;
+    el.style.transform = `translate(${x}px, ${y}px)`;
+    el.style.height = h + 'px';
+  }
+}
+
+function installSelection() {
+  // Desktop: triple-click selects the paragraph (xterm's own would select just the line).
+  term.element.addEventListener('mouseup', (e) => {
+    if (e.detail === 3 && e.button === 0) setTimeout(() => selectParagraph(cellAt(e.clientX, e.clientY), false));
+  });
+  // Selections xterm drops on its own (new output over it, buffer switch) take the UI with them.
+  term.onSelectionChange(() => { if (sel && !term.hasSelection()) { sel = null; placeSelectionUi(); } });
+
+  $('#sel-copy').addEventListener('click', () => { copyText(term.getSelection()); clearSelection(); });
+  $('#sel-all').addEventListener('click', () => {
+    const buf = term.buffer.active, last = buf.length - 1;
+    setSelection({ row: 0, col: 0 }, posIn(logicalLine(last), logicalLine(last).text.trimEnd().length));
+  });
+
+  for (const which of ['start', 'end']) {
+    const el = $(`#sel-${which}`);
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      el.setPointerCapture(e.pointerId);
+      dragging = { which, x: e.clientX, y: e.clientY };
+      autoScroll();
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      dragging.x = e.clientX; dragging.y = e.clientY;
+      dragHandle();
+    });
+    const stop = () => { dragging = null; };
+    el.addEventListener('pointerup', stop);
+    el.addEventListener('pointercancel', stop);
+  }
+}
+
+// The start knob sits above the text and the end knob below it, so aim a little away from the
+// finger: it lands on the text the handle points at, not under the fingertip.
+function dragHandle() {
+  if (!dragging || !sel) return;
+  const h = cellH();
+  const cell = cellAt(dragging.x, dragging.y + (dragging.which === 'start' ? h * 0.7 : -h * 0.7));
+  let { start, end } = sel;
+  if (dragging.which === 'start') start = cell;
+  else end = { row: cell.row, col: cell.col + 1 };
+  // Dragged past the other end: they swap roles.
+  if (start.row > end.row || (start.row === end.row && start.col >= end.col)) {
+    [start, end] = dragging.which === 'start' ? [sel.end, { row: cell.row, col: cell.col + 1 }] : [cell, sel.start];
+    dragging.which = dragging.which === 'start' ? 'end' : 'start';
+  }
+  setSelection(start, end);
+}
+
+// Near the top or bottom edge, keep scrolling while the handle is held there.
+function autoScroll() {
+  if (!dragging) return;
+  const t = $('#term').getBoundingClientRect(), edge = 48;
+  const over = dragging.y < t.top + edge ? dragging.y - (t.top + edge) : dragging.y > t.bottom - edge ? dragging.y - (t.bottom - edge) : 0;
+  if (over && localHistory()) {
+    moveTo(Math.max(0, Math.min(maxPx(), scrollPx + over * 0.25)));
+    dragHandle();
+  }
+  requestAnimationFrame(autoScroll);
 }
 
 // ================= connection =================

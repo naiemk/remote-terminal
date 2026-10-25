@@ -128,6 +128,24 @@ svg { width: 20px; height: 20px; display: block; }
 .scroller > div { width: 1px; }
 body.touch #term .xterm-scrollable-element > .scrollbar { display: none !important; }
 
+/* selection handles (touch): a caret the height of a line, with a knob above (start) or below (end) */
+.sel-handle { position: absolute; top: 0; left: 0; z-index: 3; width: 2px; margin-left: -1px; background: var(--accent); touch-action: none; }
+.sel-handle::before { content: ""; position: absolute; left: 50%; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%; background: var(--accent); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5); }
+.sel-handle.start::before { top: -12px; }
+.sel-handle.end::before { bottom: -12px; }
+/* a larger, invisible area to grab, on the knob's side only, so taps on the text still reach it */
+.sel-handle::after { content: ""; position: absolute; left: -21px; width: 44px; height: 36px; }
+.sel-handle.start::after { bottom: 100%; }
+.sel-handle.end::after { top: 100%; }
+.sel-bar {
+  position: absolute; top: 0; left: 0; z-index: 4; display: flex; gap: 2px; padding: 3px; border-radius: 12px;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+.sel-bar button { height: 36px; padding: 0 14px; border-radius: 9px; font-size: 14px; color: var(--text); }
+.sel-bar button:active { background: rgba(255, 255, 255, 0.08); }
+.sel-bar[hidden], .sel-handle[hidden] { display: none; }
+
 /* status pill + menu */
 #hud { position: absolute; top: calc(var(--safe-t) + 10px); right: 12px; z-index: 5; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .pill {

@@ -59,7 +59,15 @@
   <!-- Terminal -->
   <main id="termview" class="screen" hidden>
     <div id="stage">
-      <div id="term"></div>
+      <div id="term">
+        <!-- Touch selection: handles at both ends, and a bar to copy -->
+        <div id="sel-start" class="sel-handle start" hidden></div>
+        <div id="sel-end" class="sel-handle end" hidden></div>
+        <div id="sel-bar" class="sel-bar" hidden>
+          <button id="sel-copy">Copy</button>
+          <button id="sel-all">Select all</button>
+        </div>
+      </div>
 
       <div id="banner" class="banner" hidden>
         <span class="spinner" aria-hidden="true"></span>
