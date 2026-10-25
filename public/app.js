@@ -72,7 +72,8 @@ async function createTerminal() {
   if (isTouch) setDirectTyping(false);
 
   new ResizeObserver(() => scheduleFit()).observe($('#term'));
-  installTouchScroll();
+  installScrolling();
+  if (location.search.includes('debug')) window.__rt = { term, get scrollPx() { return scrollPx; }, get shift() { return shiftApplied; } };
   applyFontSize();
 }
 
@@ -97,52 +98,148 @@ function applyFontSize() {
   if (term) { term.options.fontSize = fontSize; scheduleFit(); }
 }
 
-// Touch scrolling (xterm's own touch handling is limited). With local scrollback we scroll
-// the viewport; full-screen apps (alt screen, e.g. Claude Code) have none, so we feed xterm a
-// synthetic wheel event instead and it does what a desktop terminal would: a mouse-wheel report
-// when the app tracks the mouse, otherwise up/down arrows.
-function installTouchScroll() {
-  const el = $('#term');
-  let ptX = 0, ptY = 0, lastY = null, acc = 0, velocity = 0, lastT = 0, raf = null;
-  const lineH = () => (term._core?._renderService?.dimensions?.css?.cell?.height) || fontSize * 1.15;
-  const localScrollback = () => term.buffer.active.type === 'normal' && term.modes.mouseTrackingMode === 'none';
-  const scrollBy = (px) => {
-    if (!localScrollback()) {
-      term.element.dispatchEvent(new WheelEvent('wheel', {
-        deltaY: px, deltaMode: WheelEvent.DOM_DELTA_PIXEL, clientX: ptX, clientY: ptY,
-        bubbles: true, cancelable: true,
-      }));
-      return;
-    }
-    acc += px;
-    const lines = Math.trunc(acc / lineH());
-    if (lines) { term.scrollLines(lines); acc -= lines * lineH(); }
-  };
-  el.addEventListener('touchstart', (e) => {
-    if (e.touches.length !== 1) return;
-    cancelAnimationFrame(raf);
-    ptX = e.touches[0].clientX; ptY = lastY = e.touches[0].clientY;
-    lastT = performance.now(); velocity = 0; acc = 0;
-  }, { passive: true, capture: true });
-  el.addEventListener('touchmove', (e) => {
-    if (lastY === null || e.touches.length !== 1) return;
-    const y = e.touches[0].clientY, now = performance.now();
-    const dy = lastY - y;
-    velocity = dy / Math.max(1, now - lastT);
-    ptX = e.touches[0].clientX; ptY = lastY = y; lastT = now;
-    scrollBy(dy);
+// ================= scrolling =================
+//
+// xterm only scrolls a whole line at a time and has no native touch scrolling, which feels
+// wrong on a phone. So the terminal's position is kept in pixels: xterm shows the line at the
+// top of the view, and the screen is shifted by the leftover pixels. On touch devices an
+// invisible, natively scrolling layer sits on top, so a swipe gets the browser's own scrolling,
+// momentum and bounce. On a computer, the wheel and trackpad drive the same pixel position.
+//
+// Full-screen apps (alt screen, e.g. less or Codex) and apps that track the mouse have no
+// local history: the same gestures become mouse-wheel input for the app (xterm turns that into
+// a wheel report, or arrow keys).
+
+const BIG = 200_000; // spacer height while the gestures go to an app
+let scroller, spacer, screenEl;
+let scrollPx = 0;          // where the view is, in pixels from the top of the history
+let ourLine = -1;          // the line we last scrolled xterm to (its scroll events for it are ours)
+let echoTop = null;        // scroll events from setting the layer's position ourselves
+let touching = false;
+let lastTop = 0, wheelAcc = 0;
+let pendingShift = 0, shiftApplied = 0;
+
+const cellH = () => term._core?._renderService?.dimensions?.css?.cell?.height || screenEl.offsetHeight / term.rows || fontSize * 1.15;
+// History scrolls locally, unless the app has the alt screen or the mouse.
+const localHistory = () => term.buffer.active.type === 'normal' && term.modes.mouseTrackingMode === 'none';
+const maxPx = () => term.buffer.active.baseY * cellH();
+const atBottom = () => term.buffer.active.viewportY >= term.buffer.active.baseY && Math.abs(shiftApplied) < 0.5;
+
+function installScrolling() {
+  screenEl = term.element.querySelector('.xterm-screen');
+
+  // Move the terminal to `px`: whole lines through xterm, the rest as a pixel shift.
+  // Past either end (iOS bounce) the shift just keeps going, like a native page.
+  term.onRender(() => applyShift()); // after xterm drew the new line, in the same frame
+  term.onScroll((y) => {
+    if (y === ourLine) return;
+    // xterm moved by itself (output while at the bottom, typing, trimmed history): follow it.
+    scrollPx = term.buffer.active.viewportY * cellH();
+    pendingShift = 0; applyShift();
+    syncScroller();
+  });
+  term.onWriteParsed(() => syncScroller());
+  term.onResize(() => { scrollPx = term.buffer.active.viewportY * cellH(); pendingShift = 0; applyShift(); syncScroller(); });
+  term.buffer.onBufferChange(() => { pendingShift = 0; applyShift(); syncScroller(true); });
+
+  // Wheel and trackpad (and mice on tablets).
+  let target = null, raf = 0;
+  $('#term').addEventListener('wheel', (e) => {
+    if (!localHistory() || e.shiftKey || e.ctrlKey) return; // apps get xterm's own wheel handling
     e.preventDefault(); e.stopPropagation();
-  }, { passive: false, capture: true });
-  el.addEventListener('touchend', () => {
-    lastY = null;
+    const unit = e.deltaMode === 1 ? cellH() : e.deltaMode === 2 ? cellH() * term.rows : 1;
+    const dy = e.deltaY * unit;
+    // Trackpads send small steps: follow them exactly. Mouse wheels jump: glide there.
+    if (Math.abs(dy) < 40 && target === null) return moveTo(scrollPx + dy);
+    target = Math.max(0, Math.min(maxPx(), (target ?? scrollPx) + dy));
+    cancelAnimationFrame(raf);
     const glide = () => {
-      velocity *= 0.95;
-      if (Math.abs(velocity) < 0.02) return;
-      scrollBy(velocity * 16);
+      const d = target - scrollPx;
+      if (Math.abs(d) < 0.5) { moveTo(target); target = null; return; }
+      moveTo(scrollPx + d * 0.3);
       raf = requestAnimationFrame(glide);
     };
     raf = requestAnimationFrame(glide);
-  }, { passive: true, capture: true });
+  }, { passive: false, capture: true });
+
+  if (!isTouch) return;
+
+  scroller = document.createElement('div');
+  scroller.className = 'scroller';
+  spacer = document.createElement('div');
+  scroller.append(spacer);
+  $('#term').append(scroller);
+
+  scroller.addEventListener('touchstart', () => { touching = true; syncScroller(true); }, { passive: true });
+  scroller.addEventListener('touchend', () => { touching = false; }, { passive: true });
+  scroller.addEventListener('touchcancel', () => { touching = false; }, { passive: true });
+  scroller.addEventListener('scroll', () => {
+    const top = scroller.scrollTop;
+    if (echoTop !== null && Math.abs(top - echoTop) < 1) { echoTop = null; return; }
+    echoTop = null;
+    if (scroller.dataset.mode === 'history') return moveTo(top, true);
+    // App mode: turn the movement into wheel lines for the app.
+    wheelAcc += top - lastTop;
+    lastTop = top;
+    const lines = Math.trunc(wheelAcc / cellH());
+    if (!lines) return;
+    wheelAcc -= lines * cellH();
+    const r = screenEl.getBoundingClientRect();
+    screenEl.dispatchEvent(new WheelEvent('wheel', { // xterm listens on the screen, not its root
+      deltaY: lines, deltaMode: WheelEvent.DOM_DELTA_LINE, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2,
+      bubbles: true, cancelable: true,
+    }));
+  }, { passive: true });
+  // A tap still reaches the terminal (focus for typing in ⌨ mode).
+  scroller.addEventListener('click', () => { if (direct) term.focus(); });
+}
+
+function moveTo(px, fromScroller = false) {
+  const h = cellH(), max = maxPx();
+  if (Math.abs(px - max) < 0.5) px = max; // the bottom is exactly the bottom
+  scrollPx = px;
+  const line = Math.max(0, Math.min(term.buffer.active.baseY, Math.floor(Math.max(0, Math.min(max, px)) / h + 1e-6)));
+  pendingShift = px - line * h;
+  if (Math.abs(pendingShift) < 0.25) pendingShift = 0;
+  if (line !== term.buffer.active.viewportY) {
+    ourLine = line;
+    term.scrollToLine(line); // the shift is applied when xterm renders the new line
+  } else {
+    applyShift();
+  }
+  if (!fromScroller) syncScroller();
+}
+
+function applyShift() {
+  if (!screenEl || pendingShift === shiftApplied) return;
+  shiftApplied = pendingShift;
+  screenEl.style.transform = shiftApplied ? `translateY(${-shiftApplied}px)` : '';
+  $('#term').classList.toggle('scrolled', !atBottom());
+}
+
+// Keep the native layer the right size and, unless a finger is on it, at the right place.
+function syncScroller(force = false) {
+  $('#term').classList.toggle('scrolled', !atBottom());
+  if (!scroller) return;
+  const history = localHistory();
+  const mode = history ? 'history' : 'app';
+  if (scroller.dataset.mode !== mode) { scroller.dataset.mode = mode; force = true; }
+  if (history) {
+    spacer.style.height = scroller.clientHeight + maxPx() + 'px';
+    const want = Math.round(scrollPx);
+    if (!touching && Math.abs(scroller.scrollTop - want) > 1) setTop(want);
+  } else if (force) {
+    // Park in the middle at the start of each touch, so a fling never hits an end.
+    spacer.style.height = BIG + 'px';
+    setTop(BIG / 2);
+    lastTop = scroller.scrollTop;
+    wheelAcc = 0;
+  }
+}
+
+function setTop(v) {
+  scroller.scrollTop = v;
+  echoTop = scroller.scrollTop;
 }
 
 // ================= connection =================
