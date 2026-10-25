@@ -29,6 +29,13 @@ On the first run, `remote-terminal-server` checks for Tailscale, offers to run `
 * [Using the console](docs/guides/console.md) · [Commands](docs/guides/commands.md) · [Keep it running](docs/guides/keep-running.md)
 * [CLI](docs/reference/cli.md) · [Configuration](docs/reference/configuration.md) · [Security](docs/reference/security.md) · [Troubleshooting](docs/reference/troubleshooting.md)
 
+## What you get
+
+* **Smooth scrolling** with your finger, trackpad or wheel, with momentum, like a native app.
+* **Text selection on the phone:** tap a word, triple-tap a paragraph, drag the handles, copy.
+* **A menu per terminal:** it shows what's running now (`cursor-agent`, not the `bash` it was started from) and where, and lets you switch between terminals.
+* **Files between you and your agents:** each terminal has a scratch folder (`$REMOTE_TERM_SCRATCH`). Upload, download and copy its path from the browser.
+
 ## Commands
 
 The **Start** buttons come from `~/.remote-terminal-server/commands.json`. Edit it with `remote-terminal-server edit`. Changes show up without a restart.

@@ -53,6 +53,33 @@
       </label>
       <div id="command-list" class="commands"></div>
       <p class="error" id="home-error" role="alert"></p>
+
+      <h2>Files</h2>
+      <button id="home-files" class="files-card">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
+        <span class="s-main"><b>Shared scratch</b><small id="home-files-path"></small></span>
+      </button>
+    </div>
+  </section>
+
+  <!-- Files: the shared scratch area, one folder per terminal -->
+  <section id="files" class="screen overlay" hidden aria-label="Files">
+    <div class="card files-panel">
+      <div class="files-head">
+        <button id="files-up" class="ghost-icon" aria-label="Up">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <div class="files-title"><b id="files-name">Files</b><small id="files-path"></small></div>
+        <button id="files-close" class="ghost-icon" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="files-actions">
+        <label class="chip upload">Upload<input id="files-input" type="file" multiple hidden></label>
+        <button id="files-copy" class="chip ghost">Copy path</button>
+      </div>
+      <div id="files-list" class="files-list"></div>
+      <p class="error" id="files-error" role="alert"></p>
     </div>
   </section>
 
@@ -79,22 +106,41 @@
           <span class="dot" data-state="off"></span>
           <span id="status-text">offline</span>
         </button>
-        <div id="menu" class="menu" role="menu" hidden>
-          <div class="menu-head" id="menu-head"></div>
-          <div class="menu-row">
-            <span>Font size</span>
-            <div class="stepper">
-              <button data-act="font-" aria-label="Smaller">−</button>
-              <output id="font-size">14</output>
-              <button data-act="font+" aria-label="Larger">+</button>
+        <div id="menu" class="menu" hidden>
+          <!-- This terminal: what runs in it, where, and its scratch folder -->
+          <div class="menu-head">
+            <div class="mh-title"><b id="mh-program"></b><span id="mh-viewers"></span></div>
+            <div id="mh-where" class="mh-where"></div>
+            <div class="mh-scratch">
+              <span>scratch</span><code id="mh-scratch"></code>
+              <button class="mini" data-act="copy-scratch">Copy path</button>
+              <button class="mini" data-act="files">Files</button>
             </div>
           </div>
-          <button class="menu-item" data-act="home" role="menuitem">Home</button>
-          <button class="menu-item" data-act="keys" role="menuitem">Show key bar <span class="switch" id="keys-switch"></span></button>
-          <button class="menu-item" data-act="fullscreen" id="fs-item" role="menuitem">Fullscreen</button>
-          <button class="menu-item" data-act="copy" role="menuitem">Copy text…</button>
-          <button class="menu-item" data-act="paste" role="menuitem">Paste</button>
-          <button class="menu-item" data-act="redraw" role="menuitem">Redraw screen</button>
+          <div class="tabs" role="tablist">
+            <button role="tab" data-tab="terms" aria-selected="true">Terminals</button>
+            <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
+          </div>
+          <div class="tab-panel" data-panel="terms" role="tabpanel">
+            <div id="menu-terms" class="menu-terms"></div>
+            <button class="menu-item" data-act="home">New terminal…</button>
+          </div>
+          <div class="tab-panel" data-panel="settings" role="tabpanel" hidden>
+            <div class="menu-row">
+              <span>Font size</span>
+              <div class="stepper">
+                <button data-act="font-" aria-label="Smaller">−</button>
+                <output id="font-size">14</output>
+                <button data-act="font+" aria-label="Larger">+</button>
+              </div>
+            </div>
+            <button class="menu-item" data-act="home">Home</button>
+            <button class="menu-item" data-act="keys">Show key bar <span class="switch" id="keys-switch"></span></button>
+            <button class="menu-item" data-act="fullscreen" id="fs-item">Fullscreen</button>
+            <button class="menu-item" data-act="copy">Copy text…</button>
+            <button class="menu-item" data-act="paste">Paste</button>
+            <button class="menu-item" data-act="redraw">Redraw screen</button>
+          </div>
         </div>
       </div>
 

@@ -24,7 +24,7 @@ Terminals belong to the server, not to the browser. Close the tab, lock the phon
 
 <img src="../images/console-terminal.png" alt="A terminal on a phone" width="320">
 
-* **Swipe** to scroll. In full-screen apps such as Claude Code, the swipe scrolls inside the app.
+* **Scroll** with your finger, the trackpad or the mouse wheel, like any page: it moves smoothly and keeps gliding after a flick. When new output arrives while you're scrolled back, the view stays put. Typing or scrolling to the end takes you back to the live bottom. In full-screen apps that have no history of their own (`less`, `vim`, Codex), the same gesture scrolls inside the app.
 * The **key bar** along the bottom has the keys a phone keyboard lacks: `esc`, `tab`, `⇧tab`, `^C`, the arrows, `⏎`, `^D`, `^L`, `pgup` and `pgdn`. Swipe it sideways for more.
 * Tapping the terminal doesn't open the phone keyboard. Tap **⌨** at the end of the key bar to type straight into the terminal.
 
@@ -39,11 +39,32 @@ The pencil button opens the compose box. It's the comfortable way to write a pro
 * Text with several lines is sent as one paste, so Claude Code takes it as a single prompt.
 * On a computer: **Ctrl/Cmd+K** opens it, **Enter** sends, **Shift+Enter** adds a new line.
 
+## Select and copy text
+
+<img src="../images/console-select.png" alt="A selected paragraph with handles and the Copy bar" width="320">
+
+**On a phone**
+
+* **Tap** a word to select it. Paths and URLs count as one word.
+* **Tap three times** to select the whole paragraph: the lines around it, up to a blank line.
+* **Drag the handles** at either end to change the selection. Hold a handle near the top or bottom edge, and the terminal scrolls so you can select more than one screen.
+* Tap **Copy** in the bar above the selection, or **Select all** for the whole history. Tap empty space to dismiss it.
+
+**On a computer**
+
+* Drag to select, double-click a word, triple-click a paragraph. Copy with **Ctrl+Shift+C** (or **Cmd+C**).
+
 ## The menu
 
 <img src="../images/console-menu.png" alt="Status menu" width="320">
 
-Tap the status pill in the top-right corner (it shows the command's name):
+Tap the status pill in the top-right corner. It shows the program running in the terminal right now: open `bash` and start `cursor-agent` in it, and it says `cursor-agent`. The browser tab's title shows the same, with the last two folders of where it runs (`cursor-agent · nk/api`).
+
+The top of the menu is about this terminal: the program, its folder, the number of viewers and its [scratch folder](#files-pass-files-to-and-between-agents), with **Copy path** and **Files**.
+
+**Terminals** lists the other running terminals. Tap one to switch to it. Next to each are buttons to copy its scratch path and to open its files. **New terminal…** goes to the home page.
+
+**Settings**:
 
 | | |
 | --- | --- |
@@ -55,6 +76,18 @@ Tap the status pill in the top-right corner (it shows the command's name):
 | **Paste** | Send the clipboard to the terminal. |
 | **Redraw screen** | Ask the program to repaint if the screen looks wrong. |
 
+## Files: pass files to and between agents
+
+<img src="../images/console-files.png" alt="A terminal's scratch folder" width="320">
+
+Every terminal gets its own scratch folder in `~/.remote-terminal-server/scratch/`, named after the command (for example `claude-3f9a`). The programs in the terminal find it in **`$REMOTE_TERM_SCRATCH`**.
+
+* **From your phone to an agent:** open **Files** from the menu, tap **Upload**, then tell the agent to look in `$REMOTE_TERM_SCRATCH`, or tap **Copy path** and paste the path into your prompt.
+* **From an agent to your phone:** ask it to save the file in `$REMOTE_TERM_SCRATCH`, then tap it under **Files** to download it.
+* **Between agents:** copy one terminal's scratch path (from the **Terminals** tab) and give it to another agent. Or upload into **Shared scratch**, the top folder, which you open from **Files** on the home page.
+
+Files stay after a terminal ends, and you can delete them with ×. Empty folders are removed when their terminal ends.
+
 ## Copy and paste
 
 **On a phone**
@@ -64,7 +97,7 @@ Tap the status pill in the top-right corner (it shows the command's name):
 
 **On a computer**
 
-* Drag to select, then **Ctrl+Shift+C** (or **Cmd+C**) to copy. Paste with **Ctrl+Shift+V** (or **Cmd+V**).
+* Paste with **Ctrl+Shift+V** (or **Cmd+V**).
 * When a program captures the mouse, as Claude Code does, hold **Shift** (or **Option** on a Mac) while dragging.
 
 ## Several viewers

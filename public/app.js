@@ -74,6 +74,7 @@ async function createTerminal() {
   new ResizeObserver(() => scheduleFit()).observe($('#term'));
   installScrolling();
   installSelection();
+  // ?debug exposes internals to the end-to-end tests.
   if (location.search.includes('debug')) window.__rt = { term, cellAt, get sel() { return sel; }, get scrollPx() { return scrollPx; }, get shift() { return shiftApplied; } };
   applyFontSize();
 }
@@ -470,9 +471,17 @@ let meta = null;
 function onStatus(msg) {
   meta = msg;
   hideBanner();
-  setState('on', msg.command);
-  $('#menu-head').innerHTML = `<b>${esc(msg.command)}</b><br>${esc(msg.cmd)}<br>${esc(msg.cwd)} · ${plural(msg.clients, 'viewer')}`;
+  setState('on', msg.program);
+  $('#mh-program').textContent = msg.program;
+  $('#mh-viewers').textContent = plural(msg.clients, 'viewer');
+  $('#mh-where').textContent = msg.where;
+  $('#mh-scratch').textContent = msg.scratchName;
+  $('#mh-scratch').title = msg.scratch;
+  if ($('#home').hidden) document.title = `${msg.program} · ${lastTwo(msg.where)}`;
 }
+
+// "~/nk/remote-terminal" → "nk/remote-terminal"
+const lastTwo = (p) => (p === '~' || p === '/' ? p : p.split('/').filter(Boolean).slice(-2).join('/'));
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 function ago(t) {
@@ -514,10 +523,51 @@ function wakeHud() {
 ['pointerdown', 'keydown'].forEach((ev) => addEventListener(ev, wakeHud, { passive: true }));
 
 const menu = $('#menu');
+let menuTimer;
 function toggleMenu(open = menu.hidden) {
   menu.hidden = !open;
   $('#status').setAttribute('aria-expanded', open);
+  clearInterval(menuTimer);
+  if (open) { refreshMenuTerms(); menuTimer = setInterval(refreshMenuTerms, 2000); }
 }
+
+function showTab(tab) {
+  for (const b of menu.querySelectorAll('[data-tab]')) b.setAttribute('aria-selected', b.dataset.tab === tab);
+  for (const p of menu.querySelectorAll('[data-panel]')) p.hidden = p.dataset.panel !== tab;
+  store.set('menuTab', tab);
+}
+showTab(store.get('menuTab', 'terms'));
+menu.querySelector('.tabs').addEventListener('click', (e) => { const t = e.target.closest('[data-tab]'); if (t) showTab(t.dataset.tab); });
+
+const ICON_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+const ICON_FOLDER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>';
+const ICON_FILE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"/><path d="M14 3v6h6"/></svg>';
+const ICON_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+
+// The other terminals, to switch to, copy their scratch path, or open their files.
+let terms = [];
+async function refreshMenuTerms() {
+  try { terms = (await api('GET', '/api/state')).instances; } catch { return; }
+  const others = terms.filter((x) => x.id !== instanceId);
+  const html = others.length ? others.map((x) => `
+    <div class="mt">
+      <button class="mt-open" data-switch="${esc(x.id)}">
+        <span class="dot" data-state="on"></span>
+        <span class="s-main"><b>${esc(x.program)}</b><small>${esc(lastTwo(x.where))} · ${ago(x.created)}</small></span>
+      </button>
+      <button class="ghost-icon" data-copy="${esc(x.scratch)}" aria-label="Copy the scratch path of ${esc(x.program)}" title="Copy scratch path">${ICON_COPY}</button>
+      <button class="ghost-icon" data-files="${esc(x.scratchName)}" aria-label="Files of ${esc(x.program)}" title="Files">${ICON_FOLDER}</button>
+    </div>`).join('') : '<div class="empty">No other terminals.</div>';
+  const box = $('#menu-terms');
+  if (box.dataset.html !== html) box.innerHTML = box.dataset.html = html;
+}
+$('#menu-terms').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.switch) { toggleMenu(false); attach(b.dataset.switch); }
+  if (b.dataset.copy) copyText(b.dataset.copy);
+  if (b.dataset.files) { toggleMenu(false); openFiles(b.dataset.files); }
+});
 $('#status').addEventListener('click', (e) => { e.stopPropagation(); toggleMenu(); });
 document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !$('#hud').contains(e.target)) toggleMenu(false); });
 
@@ -538,6 +588,7 @@ menu.addEventListener('click', (e) => {
   const act = e.target.closest('[data-act]')?.dataset.act;
   if (!act) return;
   if (act === 'font+') { fontSize++; applyFontSize(); return; }
+  if (act === 'copy-scratch') { if (meta) copyText(meta.scratch); return; }
   if (act === 'font-') { fontSize--; applyFontSize(); return; }
   toggleMenu(false);
   if (act === 'home') showHome();
@@ -548,6 +599,7 @@ menu.addEventListener('click', (e) => {
   if (act === 'redraw') { term.clear(); sendInput('\x0c'); }
   if (act === 'copy') openCopy();
   if (act === 'paste') pasteClipboard();
+  if (act === 'files' && meta) openFiles(meta.scratchName);
 });
 
 // ================= copy / paste =================
@@ -840,6 +892,98 @@ async function openTerminal() {
   showHome();
 }
 
+// ================= files: the shared scratch area =================
+//
+// ~/.remote-terminal-server/scratch, with a folder per terminal (also in $REMOTE_TERM_SCRATCH
+// inside it). Upload from this device, download, delete, and copy a folder's path to paste
+// into a terminal.
+
+let scratchRoot = '';
+let filesPath = '';               // relative to the scratch root
+let confirmDelete = null;
+
+const fileUrl = (rel) => `/api/files/download?path=${encodeURIComponent(rel)}`;
+const join = (...parts) => parts.filter(Boolean).join('/');
+function size(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  return `${(n / 1024 ** 3).toFixed(1)} GB`;
+}
+
+async function openFiles(rel = '') {
+  filesPath = rel;
+  confirmDelete = null;
+  $('#files').hidden = false;
+  await renderFiles();
+}
+function closeFiles() { $('#files').hidden = true; }
+
+async function renderFiles() {
+  $('#files-error').textContent = '';
+  let data;
+  try { data = await api('GET', `/api/files?path=${encodeURIComponent(filesPath)}`); }
+  catch (err) {
+    if (filesPath) { filesPath = filesPath.split('/').slice(0, -1).join('/'); return renderFiles(); } // gone: go up
+    $('#files-error').textContent = err.message; return;
+  }
+  scratchRoot = data.root;
+  // At the top, say which terminal each folder belongs to.
+  if (!filesPath) try { terms = (await api('GET', '/api/state')).instances; } catch {}
+  const owner = (name) => terms.find((x) => x.scratchName === name);
+  const t = filesPath && owner(filesPath.split('/')[0]);
+  $('#files-name').textContent = filesPath ? (t ? `${t.program} · ${filesPath}` : filesPath) : 'Shared scratch';
+  $('#files-path').textContent = join(scratchRoot, filesPath) + '\u200e'; // LRM: the path is trimmed from the left (rtl) but reads left to right
+  $('#files-up').style.visibility = filesPath ? 'visible' : 'hidden';
+  $('#files-list').innerHTML = data.entries.length ? data.entries.map((f) => {
+    const rel = join(filesPath, f.name), x = !filesPath && f.dir && owner(f.name);
+    const info = f.dir ? (filesPath ? 'folder' : x ? `running · ${lastTwo(x.where)}` : 'ended') : `${size(f.size)} · ${ago(f.mtime)}`;
+    const open = f.dir
+      ? `<button class="f-open dir" data-dir="${esc(rel)}">${ICON_FOLDER}<span class="s-main"><b>${esc(x ? `${x.program} (${f.name})` : f.name)}</b><small>${esc(info)}</small></span></button>`
+      : `<a class="f-open" href="${fileUrl(rel)}" download="${esc(f.name)}">${ICON_FILE}<span class="s-main"><b>${esc(f.name)}</b><small>${esc(info)}</small></span></a>`;
+    return `<div class="f-row">${open}
+      <button class="ghost-icon" data-copy="${esc(join(scratchRoot, rel))}" aria-label="Copy path" title="Copy path">${ICON_COPY}</button>
+      <button class="ghost-icon danger${confirmDelete === rel ? ' confirm' : ''}" data-del="${esc(rel)}" aria-label="Delete ${esc(f.name)}">${confirmDelete === rel ? 'Delete?' : ICON_X}</button>
+    </div>`;
+  }).join('') : `<div class="empty">${filesPath ? 'Empty. Upload a file, or save one here from the terminal.' : 'No folders yet. Each terminal gets one when it starts.'}</div>`;
+}
+
+async function upload(fileList) {
+  const list = [...fileList];
+  if (!list.length) return;
+  for (const [i, file] of list.entries()) {
+    toast(list.length > 1 ? `Uploading ${i + 1}/${list.length}…` : `Uploading ${file.name}…`);
+    const res = await fetch(`/api/files/upload?path=${encodeURIComponent(filesPath)}&name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file });
+    if (!res.ok) { $('#files-error').textContent = (await res.json().catch(() => ({}))).error || 'Upload failed'; break; }
+  }
+  toast(list.length > 1 ? `Uploaded ${list.length} files` : 'Uploaded');
+  renderFiles();
+}
+
+$('#files-list').addEventListener('click', async (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.dir) { filesPath = b.dataset.dir; confirmDelete = null; return renderFiles(); }
+  if (b.dataset.copy) return copyText(b.dataset.copy);
+  if (b.dataset.del) {
+    if (confirmDelete !== b.dataset.del) { confirmDelete = b.dataset.del; return renderFiles(); }
+    confirmDelete = null;
+    try { await api('DELETE', `/api/files?path=${encodeURIComponent(b.dataset.del)}`); } catch (err) { $('#files-error').textContent = err.message; }
+    renderFiles();
+  }
+});
+$('#files-up').addEventListener('click', () => { filesPath = filesPath.split('/').slice(0, -1).join('/'); renderFiles(); });
+$('#files-close').addEventListener('click', closeFiles);
+$('#files').addEventListener('click', (e) => { if (e.target.id === 'files') closeFiles(); });
+$('#files-copy').addEventListener('click', () => copyText(join(scratchRoot, filesPath)));
+$('#files-input').addEventListener('change', (e) => { upload(e.target.files); e.target.value = ''; });
+$('#home-files').addEventListener('click', () => openFiles(''));
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#files').hidden) closeFiles(); });
+// Desktop: drop files on the panel.
+for (const t of ['dragenter', 'dragover']) $('#files').addEventListener(t, (e) => { e.preventDefault(); $('#files').classList.add('dragover'); });
+$('#files').addEventListener('dragleave', (e) => { if (e.target.id === 'files') $('#files').classList.remove('dragover'); });
+$('#files').addEventListener('drop', (e) => { e.preventDefault(); $('#files').classList.remove('dragover'); upload(e.dataTransfer.files); });
+
 // ================= home: instances + commands =================
 
 let instanceId = null;
@@ -863,6 +1007,7 @@ async function showHome({ note = '' } = {}) {
   $('#home-error').textContent = '';
   $('#home-close').hidden = !(instanceId && wantConnected);
   $('#home').hidden = false;
+  document.title = 'Remote Terminal';
   clearInterval(homeTimer);
   homeTimer = setInterval(() => refreshHome({ poll: true }), 2500);
   await refreshHome();
@@ -880,6 +1025,8 @@ async function refreshHome({ poll = false } = {}) {
   if ($('#home').hidden) return;
   if ($('#home-error').textContent === 'Can’t reach the server.') $('#home-error').textContent = '';
   cwdInput.placeholder = state.defaultCwd;
+  scratchRoot = state.scratchRoot;
+  $('#home-files-path').textContent = state.scratchRoot;
   renderInstances(state.instances);
   renderCommands(state.commands);
 }
@@ -891,7 +1038,7 @@ function renderInstances(list) {
     <div class="session" aria-current="${x.id === instanceId}">
       <button class="s-open" data-join="${esc(x.id)}">
         <span class="dot" data-state="on"></span>
-        <span class="s-main"><b>${esc(x.command)}</b><small>${esc(x.cwd)}</small></span>
+        <span class="s-main"><b>${esc(x.program)}</b><small>${esc(x.program === x.command ? '' : x.command + ' · ')}${esc(lastTwo(x.where))}</small></span>
         <span class="s-meta">${ago(x.created)}<br>${plural(x.clients, 'viewer')}</span>
       </button>
       <button class="s-kill${x.id === confirming ? ' confirm' : ''}" data-kill="${esc(x.id)}" aria-label="Kill ${esc(x.command)}">

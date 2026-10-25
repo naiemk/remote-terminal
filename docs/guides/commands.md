@@ -42,6 +42,7 @@ To give a command its own folder, use an object with `cmd` and `cwd`:
 * **Your normal environment.** Commands run through a login shell (`$SHELL -lc '…'`), so `PATH` and the tools set up in your profile (mise, nvm, Homebrew, `~/.local/bin`…) are there, just as in a normal terminal.
 * **Folder.** A terminal starts in the folder typed in the **in** box on the home page. If that's empty, it uses the entry's `cwd`, then `DEFAULT_CWD` from [the settings](../reference/configuration.md), then your home folder.
 * **`REMOTE_TERM=1`** is set inside every terminal, so your scripts can tell when they run under Remote Terminal.
+* **`REMOTE_TERM_SCRATCH`** is the terminal's own [scratch folder](console.md#files-pass-files-to-and-between-agents), for files you upload from the browser or want to download.
 * The settings from `~/.remote-terminal-server/.env` (such as `PORT`) are **not** passed to the commands.
 
 {% hint style="warning" %}
