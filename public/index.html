@@ -47,14 +47,22 @@
       <div id="instance-list" class="session-list"></div>
 
       <h2>Start</h2>
-      <label class="cwd-field">
-        <span>in</span>
-        <input id="cwd" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="~">
-      </label>
+      <div class="cwd-wrap">
+        <label class="cwd-field">
+          <span>in</span>
+          <input id="cwd" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="~"
+                 role="combobox" aria-autocomplete="list" aria-controls="cwd-list" aria-expanded="false">
+          <button type="button" id="cwd-browse" class="ghost-icon" aria-label="Browse folders" title="Browse folders">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
+          </button>
+        </label>
+        <!-- Folders matching what's typed -->
+        <div id="cwd-list" class="cwd-list" role="listbox" hidden></div>
+      </div>
       <div id="command-list" class="commands"></div>
       <p class="error" id="home-error" role="alert"></p>
 
-      <h2>Files</h2>
+      <h2 class="home-files-h">Files</h2>
       <button id="home-files" class="files-card">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
         <span class="s-main"><b>Shared scratch</b><small id="home-files-path"></small></span>
@@ -80,6 +88,27 @@
       </div>
       <div id="files-list" class="files-list"></div>
       <p class="error" id="files-error" role="alert"></p>
+    </div>
+  </section>
+
+  <!-- Folder browser for "start in" -->
+  <section id="picker" class="screen overlay" hidden aria-label="Choose a folder">
+    <div class="card files-panel">
+      <div class="files-head">
+        <button id="picker-up" class="ghost-icon" aria-label="Up">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <div class="files-title"><b id="picker-name">Choose a folder</b><small id="picker-path"></small></div>
+        <button id="picker-close" class="ghost-icon" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <label class="cwd-field picker-filter">
+        <span>filter</span>
+        <input id="picker-filter" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
+      </label>
+      <div id="picker-list" class="files-list"></div>
+      <button id="picker-use" class="chip upload picker-use">Use this folder</button>
     </div>
   </section>
 
@@ -109,7 +138,10 @@
         <div id="menu" class="menu" hidden>
           <!-- This terminal: what runs in it, where, and its scratch folder -->
           <div class="menu-head">
-            <div class="mh-title"><b id="mh-program"></b><span id="mh-viewers"></span></div>
+            <div class="mh-title">
+              <span id="mh-name" class="mh-name"><b id="mh-program"></b><button class="mini" data-act="rename" aria-label="Rename this terminal">Rename</button></span>
+              <span id="mh-viewers"></span>
+            </div>
             <div id="mh-where" class="mh-where"></div>
             <div class="mh-scratch">
               <span>scratch</span><code id="mh-scratch"></code>

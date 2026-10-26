@@ -448,7 +448,7 @@ function connect() {
   sock.onclose = (e) => {
     if (ws !== sock || !wantConnected) return;
     if (e.code === 4404) {
-      const name = meta?.command || 'The instance';
+      const name = meta ? nameOf(meta) : 'The instance';
       disconnect();
       instanceId = null;
       return showHome({ note: e.reason === 'no such instance' ? `${name} is no longer running.` : `${name} ${e.reason}.` });
@@ -471,17 +471,58 @@ let meta = null;
 function onStatus(msg) {
   meta = msg;
   hideBanner();
-  setState('on', msg.program);
-  $('#mh-program').textContent = msg.program;
+  setState('on', nameOf(msg));
+  if (!$('#mh-name input')) $('#mh-program').textContent = nameOf(msg);
   $('#mh-viewers').textContent = plural(msg.clients, 'viewer');
-  $('#mh-where').textContent = msg.where;
-  $('#mh-scratch').textContent = msg.scratchName;
-  $('#mh-scratch').title = msg.scratch;
-  if ($('#home').hidden) document.title = `${msg.program} · ${lastTwo(msg.where)}`;
+  $('#mh-where').textContent = msg.name ? `${msg.program || msg.command} · ${whereOf(msg)}` : whereOf(msg);
+  $('.mh-scratch').hidden = !msg.scratch; // an older server has no scratch folders
+  $('#mh-scratch').textContent = msg.scratchName || '';
+  $('#mh-scratch').title = msg.scratch || '';
+  if ($('#home').hidden) document.title = `${nameOf(msg)} · ${lastTwo(whereOf(msg))}`;
 }
 
 // "~/nk/remote-terminal" → "nk/remote-terminal"
-const lastTwo = (p) => (p === '~' || p === '/' ? p : p.split('/').filter(Boolean).slice(-2).join('/'));
+const lastTwo = (p = '') => (p === '~' || p === '/' ? p : p.split('/').filter(Boolean).slice(-2).join('/'));
+// What to call a terminal: the name the user gave it, or else what runs in it.
+const nameOf = (x) => x.name || x.program || x.command;
+const whereOf = (x) => x.where || x.cwd || '';
+// The line under the name: what runs there (once it has a name of its own) and the folder.
+const detailOf = (x) => [x.name ? x.program || x.command : '', lastTwo(whereOf(x))].filter(Boolean).join(' · ');
+
+// Rename a terminal in place: `el` turns into a text field. Enter or leaving it saves, Escape cancels.
+// An empty name goes back to showing the program.
+let renaming = null;
+function renameInline(el, x, done) {
+  const input = document.createElement('input');
+  Object.assign(input, { className: 'rename', value: x.name || '', placeholder: x.program || x.command, maxLength: 60, enterKeyHint: 'done', spellcheck: false });
+  input.setAttribute('aria-label', `Name for ${nameOf(x)}`);
+  input.setAttribute('autocomplete', 'off');
+  renaming = x.id;
+  el.hidden = true;
+  el.after(input);
+  input.focus();
+  input.select();
+  let finished = false;
+  const finish = async (save) => {
+    if (finished) return;
+    finished = true;
+    const name = input.value.trim();
+    if (save && name !== (x.name || '')) {
+      try { Object.assign(x, await api('PATCH', `/api/instances/${encodeURIComponent(x.id)}`, { name })); }
+      catch (err) { toast(err.message === 'not found' ? 'Restart the server to rename terminals' : `Couldn’t rename: ${err.message}`); }
+    }
+    renaming = null;
+    input.remove();
+    el.hidden = false;
+    done(x);
+  };
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+}
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 function ago(t) {
@@ -548,15 +589,16 @@ const ICON_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strok
 let terms = [];
 async function refreshMenuTerms() {
   try { terms = (await api('GET', '/api/state')).instances; } catch { return; }
+  if (meta && !$('#mh-name input')) { const me = terms.find((x) => x.id === instanceId); if (me) onStatus({ ...meta, ...me }); } // renamed elsewhere
   const others = terms.filter((x) => x.id !== instanceId);
   const html = others.length ? others.map((x) => `
     <div class="mt">
       <button class="mt-open" data-switch="${esc(x.id)}">
         <span class="dot" data-state="on"></span>
-        <span class="s-main"><b>${esc(x.program)}</b><small>${esc(lastTwo(x.where))} · ${ago(x.created)}</small></span>
+        <span class="s-main"><b>${esc(nameOf(x))}</b><small>${esc(detailOf(x))} · ${ago(x.created)}</small></span>
       </button>
-      <button class="ghost-icon" data-copy="${esc(x.scratch)}" aria-label="Copy the scratch path of ${esc(x.program)}" title="Copy scratch path">${ICON_COPY}</button>
-      <button class="ghost-icon" data-files="${esc(x.scratchName)}" aria-label="Files of ${esc(x.program)}" title="Files">${ICON_FOLDER}</button>
+      ${x.scratch ? `<button class="ghost-icon" data-copy="${esc(x.scratch)}" aria-label="Copy the scratch path of ${esc(nameOf(x))}" title="Copy scratch path">${ICON_COPY}</button>
+      <button class="ghost-icon" data-files="${esc(x.scratchName)}" aria-label="Files of ${esc(nameOf(x))}" title="Files">${ICON_FOLDER}</button>` : ''}
     </div>`).join('') : '<div class="empty">No other terminals.</div>';
   const box = $('#menu-terms');
   if (box.dataset.html !== html) box.innerHTML = box.dataset.html = html;
@@ -589,6 +631,7 @@ menu.addEventListener('click', (e) => {
   if (!act) return;
   if (act === 'font+') { fontSize++; applyFontSize(); return; }
   if (act === 'copy-scratch') { if (meta) copyText(meta.scratch); return; }
+  if (act === 'rename') { if (meta && !$('#mh-name input')) renameInline($('#mh-program'), { ...meta }, (x) => onStatus({ ...meta, ...x })); return; }
   if (act === 'font-') { fontSize--; applyFontSize(); return; }
   toggleMenu(false);
   if (act === 'home') showHome();
@@ -932,14 +975,14 @@ async function renderFiles() {
   if (!filesPath) try { terms = (await api('GET', '/api/state')).instances; } catch {}
   const owner = (name) => terms.find((x) => x.scratchName === name);
   const t = filesPath && owner(filesPath.split('/')[0]);
-  $('#files-name').textContent = filesPath ? (t ? `${t.program} · ${filesPath}` : filesPath) : 'Shared scratch';
+  $('#files-name').textContent = filesPath ? (t ? `${nameOf(t)} · ${filesPath}` : filesPath) : 'Shared scratch';
   $('#files-path').textContent = join(scratchRoot, filesPath) + '\u200e'; // LRM: the path is trimmed from the left (rtl) but reads left to right
   $('#files-up').style.visibility = filesPath ? 'visible' : 'hidden';
   $('#files-list').innerHTML = data.entries.length ? data.entries.map((f) => {
     const rel = join(filesPath, f.name), x = !filesPath && f.dir && owner(f.name);
-    const info = f.dir ? (filesPath ? 'folder' : x ? `running · ${lastTwo(x.where)}` : 'ended') : `${size(f.size)} · ${ago(f.mtime)}`;
+    const info = f.dir ? (filesPath ? 'folder' : x ? `running · ${detailOf(x)}` : 'ended') : `${size(f.size)} · ${ago(f.mtime)}`;
     const open = f.dir
-      ? `<button class="f-open dir" data-dir="${esc(rel)}">${ICON_FOLDER}<span class="s-main"><b>${esc(x ? `${x.program} (${f.name})` : f.name)}</b><small>${esc(info)}</small></span></button>`
+      ? `<button class="f-open dir" data-dir="${esc(rel)}">${ICON_FOLDER}<span class="s-main"><b>${esc(x ? `${nameOf(x)} (${f.name})` : f.name)}</b><small>${esc(info)}</small></span></button>`
       : `<a class="f-open" href="${fileUrl(rel)}" download="${esc(f.name)}">${ICON_FILE}<span class="s-main"><b>${esc(f.name)}</b><small>${esc(info)}</small></span></a>`;
     return `<div class="f-row">${open}
       <button class="ghost-icon" data-copy="${esc(join(scratchRoot, rel))}" aria-label="Copy path" title="Copy path">${ICON_COPY}</button>
@@ -993,6 +1036,118 @@ const cwdInput = $('#cwd');
 cwdInput.value = store.get('cwd', '');
 cwdInput.addEventListener('change', () => store.set('cwd', cwdInput.value.trim()));
 
+// ---- "start in": folder suggestions as you type ----
+// Up to 10 folders that match what's typed. Picking one fills it in (ending in "/"), so the
+// next level shows right away; keep typing or picking to go deeper.
+const cwdList = $('#cwd-list');
+let cwdItems = [], cwdActive = -1, cwdSeq = 0, cwdTimer;
+const dirs = (q, limit = 10) => api('GET', `/api/dirs?q=${encodeURIComponent(q)}&limit=${limit}`);
+
+async function suggestDirs() {
+  const seq = ++cwdSeq;
+  let data;
+  try { data = await dirs(cwdInput.value); } catch { return closeSuggest(); } // e.g. an older server
+  if (seq !== cwdSeq || document.activeElement !== cwdInput) return;
+  cwdItems = data.dirs;
+  cwdActive = -1;
+  if (!cwdItems.length) return closeSuggest();
+  cwdList.innerHTML = cwdItems.map((d, i) =>
+    `<button type="button" role="option" data-i="${i}" tabindex="-1">${ICON_FOLDER}<span><bdi>${esc(d)}</bdi></span></button>`).join('')
+    + (data.total > cwdItems.length ? `<div class="more">${data.total - cwdItems.length} more · keep typing</div>` : '');
+  cwdList.hidden = false;
+  cwdInput.setAttribute('aria-expanded', 'true');
+}
+function closeSuggest() {
+  clearTimeout(cwdTimer); // typed just before Escape: don't reopen
+  cwdSeq++;
+  cwdList.hidden = true;
+  cwdInput.setAttribute('aria-expanded', 'false');
+}
+function markActive(i) {
+  cwdActive = i;
+  cwdList.querySelectorAll('[data-i]').forEach((b) => b.classList.toggle('active', +b.dataset.i === i));
+  cwdList.querySelector('.active')?.scrollIntoView({ block: 'nearest' });
+}
+function pickDir(d) {
+  cwdInput.value = d;
+  store.set('cwd', d);
+  cwdInput.focus();
+  suggestDirs();
+}
+cwdInput.addEventListener('input', () => { clearTimeout(cwdTimer); cwdTimer = setTimeout(suggestDirs, 120); });
+cwdInput.addEventListener('focus', suggestDirs);
+cwdInput.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== cwdInput) closeSuggest(); }, 150));
+cwdInput.addEventListener('keydown', (e) => {
+  const open = !cwdList.hidden && cwdItems.length;
+  if (e.key === 'ArrowDown' && open) { e.preventDefault(); markActive((cwdActive + 1) % cwdItems.length); }
+  else if (e.key === 'ArrowUp' && open) { e.preventDefault(); markActive((cwdActive - 1 + cwdItems.length) % cwdItems.length); }
+  else if (e.key === 'Tab' && open && !e.shiftKey) { e.preventDefault(); pickDir(cwdItems[Math.max(0, cwdActive)]); }
+  else if (e.key === 'Enter' && open && cwdActive >= 0) { e.preventDefault(); pickDir(cwdItems[cwdActive]); }
+  else if (e.key === 'Enter') { closeSuggest(); cwdInput.blur(); }
+  else if (e.key === 'Escape') { if (open) e.preventDefault(); closeSuggest(); } // also drops a request in flight
+});
+// pointerdown, not click: keeps the field focused (and the phone keyboard up).
+cwdList.addEventListener('pointerdown', (e) => {
+  const b = e.target.closest('[data-i]');
+  if (!b) return;
+  e.preventDefault();
+  pickDir(cwdItems[+b.dataset.i]);
+});
+
+// ---- "start in": a folder browser ----
+let pickerPath = '';
+async function openPicker() {
+  closeSuggest();
+  const v = cwdInput.value.trim();
+  pickerPath = v && !v.endsWith('/') ? v + '/' : v; // start where the field points
+  $('#picker').hidden = false;
+  $('#picker-filter').value = '';
+  await renderPicker();
+}
+function closePicker() { $('#picker').hidden = true; }
+async function renderPicker() {
+  let data;
+  try { data = await dirs(pickerPath, 1000); }
+  catch (err) { $('#picker-list').innerHTML = `<div class="empty">${esc(err.message)}</div>`; return; }
+  if (!data.exists && pickerPath) { pickerPath = ''; return renderPicker(); } // a typo: start from the default folder
+  pickerPath = data.path.endsWith('/') ? data.path : data.path + '/';
+  $('#picker-name').textContent = lastTwo(data.path) || data.path;
+  $('#picker-path').textContent = data.path + '‎';
+  $('#picker-up').style.visibility = data.parent ? 'visible' : 'hidden';
+  $('#picker-up').dataset.to = data.parent || '';
+  const f = $('#picker-filter').value.trim().toLowerCase();
+  const names = data.dirs.map((d) => d.slice(0, -1).split('/').pop()).filter((n) => n.toLowerCase().includes(f))
+    .sort((a, b) => !a.toLowerCase().startsWith(f) - !b.toLowerCase().startsWith(f)); // "bet": beta before alphabet
+  $('#picker-list').innerHTML = names.length ? names.map((n) =>
+    `<div class="f-row"><button class="f-open dir" data-enter="${esc(n)}">${ICON_FOLDER}<span class="s-main"><b>${esc(n)}</b></span></button></div>`).join('')
+    : `<div class="empty">${f ? 'No folders match.' : 'No folders inside.'}</div>`;
+  $('#picker-list').scrollTop = 0;
+}
+$('#cwd-browse').addEventListener('click', (e) => { e.preventDefault(); openPicker(); });
+$('#picker-close').addEventListener('click', closePicker);
+$('#picker').addEventListener('click', (e) => { if (e.target.id === 'picker') closePicker(); });
+$('#picker-up').addEventListener('click', () => { pickerPath = $('#picker-up').dataset.to + '/'; $('#picker-filter').value = ''; renderPicker(); });
+$('#picker-list').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-enter]');
+  if (!b) return;
+  pickerPath += b.dataset.enter + '/';
+  $('#picker-filter').value = '';
+  renderPicker();
+});
+$('#picker-filter').addEventListener('input', renderPicker);
+$('#picker-filter').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const first = $('#picker-list [data-enter]');
+  if (first) first.click();
+});
+$('#picker-use').addEventListener('click', () => {
+  const p = pickerPath.replace(/(.)\/$/, '$1'); // "~/nk/api/" → "~/nk/api"
+  cwdInput.value = p;
+  store.set('cwd', p);
+  closePicker();
+});
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#picker').hidden) closePicker(); });
+
 async function api(method, url, body) {
   const res = await fetch(url, {
     method, headers: body ? { 'content-type': 'application/json' } : {}, body: body && JSON.stringify(body),
@@ -1027,20 +1182,26 @@ async function refreshHome({ poll = false } = {}) {
   cwdInput.placeholder = state.defaultCwd;
   scratchRoot = state.scratchRoot;
   $('#home-files-path').textContent = state.scratchRoot;
+  for (const el of [$('#home-files'), $('.home-files-h')]) el.hidden = !state.scratchRoot; // an older server has no files
   renderInstances(state.instances);
   renderCommands(state.commands);
 }
 
+let homeList = [];
+const ICON_EDIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 function renderInstances(list) {
+  homeList = list;
+  if (renaming) return; // don't wipe the name being typed
   const box = $('#instance-list');
   const confirming = confirmKill;
   const html = list.length ? list.map((x) => `
     <div class="session" aria-current="${x.id === instanceId}">
       <button class="s-open" data-join="${esc(x.id)}">
         <span class="dot" data-state="on"></span>
-        <span class="s-main"><b>${esc(x.program)}</b><small>${esc(x.program === x.command ? '' : x.command + ' · ')}${esc(lastTwo(x.where))}</small></span>
+        <span class="s-main"><b>${esc(nameOf(x))}</b><small>${esc(detailOf(x))}</small></span>
         <span class="s-meta">${ago(x.created)}<br>${plural(x.clients, 'viewer')}</span>
       </button>
+      <button class="s-rename" data-rename="${esc(x.id)}" aria-label="Rename ${esc(nameOf(x))}" title="Rename">${ICON_EDIT}</button>
       <button class="s-kill${x.id === confirming ? ' confirm' : ''}" data-kill="${esc(x.id)}" aria-label="Kill ${esc(x.command)}">
         ${x.id === confirming ? 'Kill?' : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'}
       </button>
@@ -1067,6 +1228,12 @@ function attach(id) {
 }
 
 $('#instance-list').addEventListener('click', async (e) => {
+  const ren = e.target.closest('[data-rename]');
+  if (ren) {
+    const x = homeList.find((y) => y.id === ren.dataset.rename);
+    if (x && !renaming) renameInline(ren.closest('.session').querySelector('.s-main b'), x, () => refreshHome());
+    return;
+  }
   const kill = e.target.closest('[data-kill]');
   if (kill) {
     const id = kill.dataset.kill;

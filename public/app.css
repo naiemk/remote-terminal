@@ -35,7 +35,8 @@ svg { width: 20px; height: 20px; display: block; }
 /* ---------- home ---------- */
 
 #home {
-  z-index: 30; display: grid; place-items: center; padding: calc(var(--safe-t) + 20px) 16px calc(var(--safe-b) + 20px);
+  z-index: 30; display: grid; place-items: center; grid-template-columns: minmax(0, 460px); justify-content: center;
+  padding: calc(var(--safe-t) + 20px) 16px calc(var(--safe-b) + 20px);
   overflow-y: auto;
   background:
     radial-gradient(900px 500px at 50% -10%, rgba(224, 130, 95, 0.16), transparent 60%),
@@ -78,6 +79,12 @@ svg { width: 20px; height: 20px; display: block; }
 .s-main b { font: 600 15px var(--mono); }
 .s-main small, .s-meta { color: var(--muted); font: 12px var(--mono); }
 .s-meta { flex: none; text-align: right; line-height: 1.5; }
+.s-rename { flex: none; width: 44px; display: grid; place-items: center; color: var(--muted); border-left: 1px solid var(--border); transition: background 0.12s, color 0.12s; }
+.s-rename svg { width: 16px; height: 16px; }
+.s-rename:hover { color: var(--text); background: var(--raised-hover); }
+/* The name being edited, in place of the name (home rows and the menu head). */
+input.rename { width: 100%; min-width: 0; padding: 4px 8px; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); color: var(--text); font: 600 16px var(--mono); }
+.session:has(input.rename) .s-open { pointer-events: none; }
 .s-kill { flex: none; width: 48px; display: grid; place-items: center; color: var(--muted); border-left: 1px solid var(--border); font-size: 13px; font-weight: 600; transition: background 0.12s, color 0.12s, width 0.12s; }
 .s-kill svg { width: 18px; height: 18px; }
 .s-kill:hover { color: var(--bad); background: rgba(240, 113, 120, 0.08); }
@@ -88,6 +95,19 @@ svg { width: 20px; height: 20px; display: block; }
 .cwd-field:focus-within { border-color: rgba(224, 130, 95, 0.6); box-shadow: 0 0 0 4px rgba(224, 130, 95, 0.15); }
 .cwd-field span { color: var(--muted); font-size: 13px; }
 .cwd-field input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: none; color: var(--text); font: 16px var(--mono); }
+.cwd-field .ghost-icon { margin-right: -8px; }
+.cwd-wrap { position: relative; }
+.cwd-list { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 6px); max-height: min(50vh, 420px); overflow-y: auto; overscroll-behavior: contain; padding: 4px; border-radius: 12px; background: var(--bg); border: 1px solid var(--border); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5); }
+.cwd-list button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 6px 10px; border-radius: 8px; text-align: left; font: 14px var(--mono); color: var(--text); }
+.cwd-list button svg { width: 16px; height: 16px; flex: none; color: var(--accent-strong); }
+.cwd-list button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.cwd-list button span bdi { direction: ltr; }
+.cwd-list button.active, .cwd-list button:hover { background: var(--raised-hover); }
+.cwd-list .more { padding: 6px 10px; color: var(--muted); font: 12px var(--mono); }
+#picker { z-index: 40; display: grid; place-items: center; grid-template-columns: minmax(0, 520px); justify-content: center; padding: calc(var(--safe-t) + 16px) 12px calc(var(--safe-b) + 16px); background: rgba(5, 6, 9, 0.6); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+#picker .files-panel { width: 100%; height: 100%; max-height: 640px; }
+.picker-filter { height: 40px; flex: none; }
+.picker-use { justify-content: center; flex: none; min-height: 44px; }
 .commands { display: grid; grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 8px; }
 .cmd {
   display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-height: 56px; padding: 9px 12px; border-radius: 12px; text-align: left;
@@ -174,6 +194,10 @@ body.touch #term .xterm-scrollable-element > .scrollbar { display: none !importa
 .menu-head { padding: 8px 10px 10px; color: var(--muted); font-size: 12px; font-family: var(--mono); line-height: 1.5; }
 .menu-head b { color: var(--text); font-weight: 600; font-size: 14px; }
 .mh-title { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.mh-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.mh-name b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mh-name:has(input) .mini { display: none; }
+#mh-viewers { flex: none; }
 .mh-where { word-break: break-all; }
 .mh-scratch { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
 .mh-scratch > span { flex: none; }

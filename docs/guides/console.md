@@ -11,11 +11,14 @@ description: The home page, the terminal, typing on a phone, copy and paste.
 **Running** lists the terminals that are open on the computer, with their folder, age and number of viewers.
 
 * Tap one to join it.
+* Tap the pencil to give it a name, like `API refactor`. The name shows everywhere the terminal does: here, in the menu, on the status pill and in the tab title. Clear the name to go back to showing the program.
 * Tap **×**, then **Kill?** to close it. The program gets `SIGHUP`, then `SIGKILL` after 3 seconds.
 
 **Start** opens a new terminal with one of the [commands](commands.md).
 
 * **in** sets the folder it starts in, for example `~/code/my-app`. Leave it empty to use the command's own `cwd`, or your home folder.
+  * As you type, up to 10 matching folders drop down. Tap one (or use the arrow keys and Enter, or Tab for the first) and the folders inside it show next, so you can go deeper without typing. Hidden folders show once you type a `.`.
+  * The folder button opens a browser: tap folders to go in, ‹ to go up, type to filter, then **Use this folder**.
 * You can run any number of terminals, including several of the same command.
 
 Terminals belong to the server, not to the browser. Close the tab, lock the phone or lose signal, and the program keeps running. Join it again from Home.
@@ -60,7 +63,7 @@ The pencil button opens the compose box. It's the comfortable way to write a pro
 
 Tap the status pill in the top-right corner. It shows the program running in the terminal right now: open `bash` and start `cursor-agent` in it, and it says `cursor-agent`. The browser tab's title shows the same, with the last two folders of where it runs (`cursor-agent · nk/api`).
 
-The top of the menu is about this terminal: the program, its folder, the number of viewers and its [scratch folder](#files-pass-files-to-and-between-agents), with **Copy path** and **Files**.
+The top of the menu is about this terminal: its name (with **Rename**), the program, its folder, the number of viewers and its [scratch folder](#files-pass-files-to-and-between-agents), with **Copy path** and **Files**.
 
 **Terminals** lists the other running terminals. Tap one to switch to it. Next to each are buttons to copy its scratch path and to open its files. **New terminal…** goes to the home page.
 

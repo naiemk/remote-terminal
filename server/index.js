@@ -121,6 +121,36 @@ function childEnv(extra = {}) {
   return env;
 }
 
+// Folders for the "start in" field: what's typed so far ("~/nk/re") → the folders it could be
+// ("~/nk/remote-terminal/", …), written the way it was typed. A path ending in "/" lists its
+// folders, which is also how the folder browser walks the tree. Hidden folders only show once
+// a "." is typed. Relative paths are from the default folder, like the start field itself.
+function listDirs(typed, limit) {
+  typed = String(typed || '');
+  if (typed === '~') typed = '~/';
+  const cut = typed.lastIndexOf('/') + 1;
+  const head = typed.slice(0, cut), prefix = typed.slice(cut);
+  const dir = path.resolve(DEFAULT_CWD, expandHome(head || '.'));
+  let names = [], exists = true;
+  try {
+    names = fs.readdirSync(dir, { withFileTypes: true })
+      .filter((d) => (d.isDirectory() || (d.isSymbolicLink() && fs.statSync(path.join(dir, d.name), { throwIfNoEntry: false })?.isDirectory())))
+      .map((d) => d.name);
+  } catch (err) {
+    if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR' && err.code !== 'EACCES') throw err;
+    exists = err.code === 'EACCES';
+  }
+  const lower = prefix.toLowerCase();
+  const rank = (n) => (n.startsWith(prefix) ? 0 : 1);
+  names = names
+    .filter((n) => n.toLowerCase().startsWith(lower) && (prefix.startsWith('.') || !n.startsWith('.')))
+    .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true }));
+  return {
+    path: tildify(dir), exists, parent: dir === '/' ? null : tildify(path.dirname(dir)),
+    total: names.length, dirs: names.slice(0, limit).map((n) => `${head}${n}/`),
+  };
+}
+
 // ---------- instances ----------
 
 const instances = new Map();
@@ -128,6 +158,7 @@ const instances = new Map();
 function instanceInfo(x) {
   return {
     id: x.id, command: x.command, cmd: x.cmd, cwd: tildify(x.cwd), created: x.created, clients: x.clients.size,
+    name: x.name || '', // what the user called it; empty until they rename it
     // What's running now (e.g. cursor-agent inside bash) and where.
     program: x.fg?.name || x.command, where: tildify(x.fg?.cwd || x.cwd),
     scratch: x.scratch, scratchName: path.basename(x.scratch),
@@ -148,7 +179,7 @@ setInterval(() => { for (const x of instances.values()) detect(x); }, 2000);
 function startInstance(command, cwdInput) {
   const spec = loadCommands()[command];
   if (!spec) throw new Error(`Unknown command "${command}"`);
-  const cwd = path.resolve(expandHome(String(cwdInput || spec.cwd || DEFAULT_CWD)));
+  const cwd = path.resolve(DEFAULT_CWD, expandHome(String(cwdInput || spec.cwd || DEFAULT_CWD)));
   if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`No such directory: ${tildify(cwd)}`);
 
   const id = crypto.randomBytes(6).toString('hex');
@@ -227,6 +258,12 @@ const server = http.createServer(async (req, res) => {
     catch (err) { return sendJson(res, 400, { error: err.message }); }
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/dirs') {
+    const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 10));
+    try { return sendJson(res, 200, listDirs(url.searchParams.get('q'), limit)); }
+    catch { return sendJson(res, 500, { error: 'failed' }); }
+  }
+
   if (url.pathname.startsWith('/api/files')) {
     const rel = url.searchParams.get('path') || '';
     try {
@@ -242,6 +279,17 @@ const server = http.createServer(async (req, res) => {
   }
 
   const m = url.pathname.match(/^\/api\/instances\/([\w-]+)$/);
+  // Rename: { name }. An empty name goes back to showing the program.
+  if (req.method === 'PATCH' && m) {
+    const x = instances.get(m[1]);
+    if (!x) return sendJson(res, 404, { error: 'no such instance' });
+    let body = {};
+    try { body = JSON.parse(await readBody(req)); } catch {}
+    if (typeof body.name !== 'string') return sendJson(res, 400, { error: 'name must be a string' });
+    x.name = body.name.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 60);
+    notifyStatus(x);
+    return sendJson(res, 200, instanceInfo(x));
+  }
   if (req.method === 'DELETE' && m) {
     const x = instances.get(m[1]);
     if (!x) return sendJson(res, 404, { error: 'no such instance' });
