@@ -13,6 +13,7 @@ Remote Terminal gives a shell on your computer to anyone who can reach it. There
 * **It only listens on `127.0.0.1`.** This is fixed in the code. A `BIND` setting is ignored with a warning. Nothing on your Wi-Fi, LAN or the internet can connect to the port directly.
 * **`tailscale serve` is the only way in.** It serves HTTPS with a valid certificate, and only devices signed in to your tailnet can reach it. `tailscale serve status` should show `(tailnet only)`.
 * **Other websites can't drive it through your browser.** API calls and WebSockets are refused unless they come from the console's own page (an `Origin` check).
+* **Files stay in the scratch folder.** The file browser only reaches `~/.remote-terminal-server/scratch`. Paths that lead outside it, including through symlinks, are refused. Uploads never overwrite an existing file.
 * **No DNS rebinding.** Requests are ignored unless they're addressed to `localhost`, `127.0.0.1`, `*.ts.net` or a name in `ALLOWED_HOSTS`.
 
 ## What you need to do

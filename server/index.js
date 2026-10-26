@@ -15,6 +15,8 @@ import pty from 'node-pty';
 import { WebSocketServer } from 'ws';
 import { isAutoResponse } from '../shared/input.js';
 import { ensureConfig } from './config.js';
+import { createFiles } from './files.js';
+import { foreground } from './procinfo.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -33,6 +35,7 @@ if (process.env.BIND && process.env.BIND !== BIND) {
 const SHELL = process.env.SHELL || '/bin/bash';
 const DEFAULT_CWD = expandHome(process.env.DEFAULT_CWD || os.homedir());
 const SCROLLBACK_BYTES = 512 * 1024;
+const files = createFiles(path.join(CONFIG_DIR, 'scratch'));
 
 // ---------- helpers ----------
 
@@ -112,10 +115,40 @@ function loadCommands() {
 }
 
 // The commands get your normal environment, minus what came from .env.
-function childEnv() {
-  const env = { ...process.env, COLORTERM: 'truecolor', REMOTE_TERM: '1' };
+function childEnv(extra = {}) {
+  const env = { ...process.env, COLORTERM: 'truecolor', REMOTE_TERM: '1', ...extra };
   for (const k of Object.keys(dotenvVars)) delete env[k];
   return env;
+}
+
+// Folders for the "start in" field: what's typed so far ("~/nk/re") → the folders it could be
+// ("~/nk/remote-terminal/", …), written the way it was typed. A path ending in "/" lists its
+// folders, which is also how the folder browser walks the tree. Hidden folders only show once
+// a "." is typed. Relative paths are from the default folder, like the start field itself.
+function listDirs(typed, limit) {
+  typed = String(typed || '');
+  if (typed === '~') typed = '~/';
+  const cut = typed.lastIndexOf('/') + 1;
+  const head = typed.slice(0, cut), prefix = typed.slice(cut);
+  const dir = path.resolve(DEFAULT_CWD, expandHome(head || '.'));
+  let names = [], exists = true;
+  try {
+    names = fs.readdirSync(dir, { withFileTypes: true })
+      .filter((d) => (d.isDirectory() || (d.isSymbolicLink() && fs.statSync(path.join(dir, d.name), { throwIfNoEntry: false })?.isDirectory())))
+      .map((d) => d.name);
+  } catch (err) {
+    if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR' && err.code !== 'EACCES') throw err;
+    exists = err.code === 'EACCES';
+  }
+  const lower = prefix.toLowerCase();
+  const rank = (n) => (n.startsWith(prefix) ? 0 : 1);
+  names = names
+    .filter((n) => n.toLowerCase().startsWith(lower) && (prefix.startsWith('.') || !n.startsWith('.')))
+    .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true }));
+  return {
+    path: tildify(dir), exists, parent: dir === '/' ? null : tildify(path.dirname(dir)),
+    total: names.length, dirs: names.slice(0, limit).map((n) => `${head}${n}/`),
+  };
 }
 
 // ---------- instances ----------
@@ -123,17 +156,36 @@ function childEnv() {
 const instances = new Map();
 
 function instanceInfo(x) {
-  return { id: x.id, command: x.command, cmd: x.cmd, cwd: tildify(x.cwd), created: x.created, clients: x.clients.size };
+  return {
+    id: x.id, command: x.command, cmd: x.cmd, cwd: tildify(x.cwd), created: x.created, clients: x.clients.size,
+    name: x.name || '', // what the user called it; empty until they rename it
+    // What's running now (e.g. cursor-agent inside bash) and where.
+    program: x.fg?.name || x.command, where: tildify(x.fg?.cwd || x.cwd),
+    scratch: x.scratch, scratchName: path.basename(x.scratch),
+  };
 }
+
+// Look up what each terminal runs every couple of seconds (and soon after Enter), and tell
+// its viewers when it changes.
+async function detect(x) {
+  const fg = await foreground(x.pty.pid);
+  if (!fg || !instances.has(x.id)) return;
+  if (fg.name === x.fg?.name && fg.cwd === x.fg?.cwd) return;
+  x.fg = fg;
+  notifyStatus(x);
+}
+setInterval(() => { for (const x of instances.values()) detect(x); }, 2000);
 
 function startInstance(command, cwdInput) {
   const spec = loadCommands()[command];
   if (!spec) throw new Error(`Unknown command "${command}"`);
-  const cwd = path.resolve(expandHome(String(cwdInput || spec.cwd || DEFAULT_CWD)));
+  const cwd = path.resolve(DEFAULT_CWD, expandHome(String(cwdInput || spec.cwd || DEFAULT_CWD)));
   if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`No such directory: ${tildify(cwd)}`);
 
+  const id = crypto.randomBytes(6).toString('hex');
   const x = {
-    id: crypto.randomBytes(6).toString('hex'),
+    id,
+    scratch: files.dirFor(command, id),
     command, cmd: spec.cmd, cwd,
     created: Date.now(),
     clients: new Set(),
@@ -145,7 +197,7 @@ function startInstance(command, cwdInput) {
   // A login shell, so PATH and friends match a normal terminal (mise, nvm, ~/.local/bin…).
   // No `exec` prefix: it breaks `FOO=1 cmd` and `a; b`, and bash/zsh already exec a lone simple command.
   x.pty = pty.spawn(SHELL, ['-lc', spec.cmd], {
-    name: 'xterm-256color', cols: x.size.cols, rows: x.size.rows, cwd, env: childEnv(),
+    name: 'xterm-256color', cols: x.size.cols, rows: x.size.rows, cwd, env: childEnv({ REMOTE_TERM_SCRATCH: x.scratch }),
   });
   x.pty.onData((d) => {
     const buf = Buffer.from(d, 'utf8');
@@ -156,6 +208,8 @@ function startInstance(command, cwdInput) {
   });
   x.pty.onExit(({ exitCode, signal }) => {
     clearTimeout(x.killTimer);
+    clearTimeout(x.detectTimer);
+    try { fs.rmdirSync(x.scratch); } catch {} // only if empty: files left there are kept
     instances.delete(x.id);
     const how = signal ? `signal ${signal}` : `code ${exitCode}`;
     console.log(`instance ${x.id} (${command}) exited with ${how}`);
@@ -194,7 +248,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/state') {
     const commands = Object.entries(loadCommands()).map(([name, s]) => ({ name, cmd: s.cmd, cwd: s.cwd }));
     const list = [...instances.values()].map(instanceInfo).sort((a, b) => a.created - b.created);
-    return sendJson(res, 200, { commands, instances: list, defaultCwd: tildify(DEFAULT_CWD) });
+    return sendJson(res, 200, { commands, instances: list, defaultCwd: tildify(DEFAULT_CWD), scratchRoot: files.root });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/instances') {
@@ -204,7 +258,38 @@ const server = http.createServer(async (req, res) => {
     catch (err) { return sendJson(res, 400, { error: err.message }); }
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/dirs') {
+    const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 10));
+    try { return sendJson(res, 200, listDirs(url.searchParams.get('q'), limit)); }
+    catch { return sendJson(res, 500, { error: 'failed' }); }
+  }
+
+  if (url.pathname.startsWith('/api/files')) {
+    const rel = url.searchParams.get('path') || '';
+    try {
+      if (req.method === 'GET' && url.pathname === '/api/files') return sendJson(res, 200, { root: files.root, path: rel, entries: files.list(rel) });
+      if (req.method === 'GET' && url.pathname === '/api/files/download') return await files.download(rel, res);
+      if (req.method === 'POST' && url.pathname === '/api/files/upload') return sendJson(res, 200, await files.upload(rel, url.searchParams.get('name'), req));
+      if (req.method === 'DELETE' && url.pathname === '/api/files') { files.remove(rel); return sendJson(res, 200, { ok: true }); }
+    } catch (err) {
+      if (res.headersSent) return res.destroy();
+      return sendJson(res, err.status || 500, { error: err.status ? err.message : 'failed' });
+    }
+    return sendJson(res, 404, { error: 'not found' });
+  }
+
   const m = url.pathname.match(/^\/api\/instances\/([\w-]+)$/);
+  // Rename: { name }. An empty name goes back to showing the program.
+  if (req.method === 'PATCH' && m) {
+    const x = instances.get(m[1]);
+    if (!x) return sendJson(res, 404, { error: 'no such instance' });
+    let body = {};
+    try { body = JSON.parse(await readBody(req)); } catch {}
+    if (typeof body.name !== 'string') return sendJson(res, 400, { error: 'name must be a string' });
+    x.name = body.name.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 60);
+    notifyStatus(x);
+    return sendJson(res, 200, instanceInfo(x));
+  }
   if (req.method === 'DELETE' && m) {
     const x = instances.get(m[1]);
     if (!x) return sendJson(res, 404, { error: 'no such instance' });
@@ -256,6 +341,7 @@ function onClient(ws, id) {
         if (ws.size) resize(x, ws.size.cols, ws.size.rows);
       }
       x.pty.write(msg.d);
+      if (msg.d.includes('\r')) { clearTimeout(x.detectTimer); x.detectTimer = setTimeout(() => detect(x), 400); }
     } else if (msg.t === 'resize' && msg.cols > 0 && msg.rows > 0) {
       ws.size = { cols: Math.min(msg.cols | 0, 1000), rows: Math.min(msg.rows | 0, 500) };
       x.active = ws;

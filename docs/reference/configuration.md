@@ -10,6 +10,7 @@ Everything lives in `~/.remote-terminal-server/`. To use another folder, set `RE
 | --- | --- |
 | `commands.json` | What the home page can start. See [Commands](../guides/commands.md). |
 | `.env` | Settings (below). |
+| `scratch/` | One folder per terminal, for [passing files](../guides/console.md#files-pass-files-to-and-between-agents). |
 | `app/` | The installed program. Replaced on `update`. |
 | `node/` | Only there if the installer downloaded Node.js. |
 

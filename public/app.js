@@ -72,7 +72,10 @@ async function createTerminal() {
   if (isTouch) setDirectTyping(false);
 
   new ResizeObserver(() => scheduleFit()).observe($('#term'));
-  installTouchScroll();
+  installScrolling();
+  installSelection();
+  // ?debug exposes internals to the end-to-end tests.
+  if (location.search.includes('debug')) window.__rt = { term, cellAt, get sel() { return sel; }, get scrollPx() { return scrollPx; }, get shift() { return shiftApplied; } };
   applyFontSize();
 }
 
@@ -97,52 +100,314 @@ function applyFontSize() {
   if (term) { term.options.fontSize = fontSize; scheduleFit(); }
 }
 
-// Touch scrolling (xterm's own touch handling is limited). With local scrollback we scroll
-// the viewport; full-screen apps (alt screen, e.g. Claude Code) have none, so we feed xterm a
-// synthetic wheel event instead and it does what a desktop terminal would: a mouse-wheel report
-// when the app tracks the mouse, otherwise up/down arrows.
-function installTouchScroll() {
-  const el = $('#term');
-  let ptX = 0, ptY = 0, lastY = null, acc = 0, velocity = 0, lastT = 0, raf = null;
-  const lineH = () => (term._core?._renderService?.dimensions?.css?.cell?.height) || fontSize * 1.15;
-  const localScrollback = () => term.buffer.active.type === 'normal' && term.modes.mouseTrackingMode === 'none';
-  const scrollBy = (px) => {
-    if (!localScrollback()) {
-      term.element.dispatchEvent(new WheelEvent('wheel', {
-        deltaY: px, deltaMode: WheelEvent.DOM_DELTA_PIXEL, clientX: ptX, clientY: ptY,
-        bubbles: true, cancelable: true,
-      }));
-      return;
-    }
-    acc += px;
-    const lines = Math.trunc(acc / lineH());
-    if (lines) { term.scrollLines(lines); acc -= lines * lineH(); }
-  };
-  el.addEventListener('touchstart', (e) => {
-    if (e.touches.length !== 1) return;
-    cancelAnimationFrame(raf);
-    ptX = e.touches[0].clientX; ptY = lastY = e.touches[0].clientY;
-    lastT = performance.now(); velocity = 0; acc = 0;
-  }, { passive: true, capture: true });
-  el.addEventListener('touchmove', (e) => {
-    if (lastY === null || e.touches.length !== 1) return;
-    const y = e.touches[0].clientY, now = performance.now();
-    const dy = lastY - y;
-    velocity = dy / Math.max(1, now - lastT);
-    ptX = e.touches[0].clientX; ptY = lastY = y; lastT = now;
-    scrollBy(dy);
+// ================= scrolling =================
+//
+// xterm only scrolls a whole line at a time and has no native touch scrolling, which feels
+// wrong on a phone. So the terminal's position is kept in pixels: xterm shows the line at the
+// top of the view, and the screen is shifted by the leftover pixels. On touch devices an
+// invisible, natively scrolling layer sits on top, so a swipe gets the browser's own scrolling,
+// momentum and bounce. On a computer, the wheel and trackpad drive the same pixel position.
+//
+// Full-screen apps (alt screen, e.g. less or Codex) and apps that track the mouse have no
+// local history: the same gestures become mouse-wheel input for the app (xterm turns that into
+// a wheel report, or arrow keys).
+
+const BIG = 200_000; // spacer height while the gestures go to an app
+let scroller, spacer, screenEl;
+let scrollPx = 0;          // where the view is, in pixels from the top of the history
+let ourLine = -1;          // the line we last scrolled xterm to (its scroll events for it are ours)
+let echoTop = null;        // scroll events from setting the layer's position ourselves
+let touching = false;
+let lastTop = 0, wheelAcc = 0;
+let pendingShift = 0, shiftApplied = 0;
+
+const cellH = () => term._core?._renderService?.dimensions?.css?.cell?.height || screenEl.offsetHeight / term.rows || fontSize * 1.15;
+// History scrolls locally, unless the app has the alt screen or the mouse.
+const localHistory = () => term.buffer.active.type === 'normal' && term.modes.mouseTrackingMode === 'none';
+const maxPx = () => term.buffer.active.baseY * cellH();
+const atBottom = () => term.buffer.active.viewportY >= term.buffer.active.baseY && Math.abs(shiftApplied) < 0.5;
+
+function installScrolling() {
+  screenEl = term.element.querySelector('.xterm-screen');
+
+  // Move the terminal to `px`: whole lines through xterm, the rest as a pixel shift.
+  // Past either end (iOS bounce) the shift just keeps going, like a native page.
+  term.onRender(() => { applyShift(); placeSelectionUi(); }); // after xterm drew the new line, in the same frame
+  term.onScroll((y) => {
+    if (y === ourLine) return;
+    // xterm moved by itself (output while at the bottom, typing, trimmed history): follow it.
+    scrollPx = term.buffer.active.viewportY * cellH();
+    pendingShift = 0; applyShift();
+    syncScroller();
+  });
+  term.onWriteParsed(() => syncScroller());
+  term.onResize(() => { scrollPx = term.buffer.active.viewportY * cellH(); pendingShift = 0; applyShift(); syncScroller(); });
+  term.buffer.onBufferChange(() => { pendingShift = 0; applyShift(); syncScroller(true); });
+
+  // Wheel and trackpad (and mice on tablets).
+  let target = null, raf = 0;
+  $('#term').addEventListener('wheel', (e) => {
+    if (!localHistory() || e.shiftKey || e.ctrlKey) return; // apps get xterm's own wheel handling
     e.preventDefault(); e.stopPropagation();
-  }, { passive: false, capture: true });
-  el.addEventListener('touchend', () => {
-    lastY = null;
+    const unit = e.deltaMode === 1 ? cellH() : e.deltaMode === 2 ? cellH() * term.rows : 1;
+    const dy = e.deltaY * unit;
+    // Trackpads send small steps: follow them exactly. Mouse wheels jump: glide there.
+    if (Math.abs(dy) < 40 && target === null) return moveTo(scrollPx + dy);
+    target = Math.max(0, Math.min(maxPx(), (target ?? scrollPx) + dy));
+    cancelAnimationFrame(raf);
     const glide = () => {
-      velocity *= 0.95;
-      if (Math.abs(velocity) < 0.02) return;
-      scrollBy(velocity * 16);
+      const d = target - scrollPx;
+      if (Math.abs(d) < 0.5) { moveTo(target); target = null; return; }
+      moveTo(scrollPx + d * 0.3);
       raf = requestAnimationFrame(glide);
     };
     raf = requestAnimationFrame(glide);
-  }, { passive: true, capture: true });
+  }, { passive: false, capture: true });
+
+  if (!isTouch) return;
+
+  scroller = document.createElement('div');
+  scroller.className = 'scroller';
+  spacer = document.createElement('div');
+  scroller.append(spacer);
+  $('#term').append(scroller);
+
+  scroller.addEventListener('touchstart', () => { touching = true; syncScroller(true); }, { passive: true });
+  scroller.addEventListener('touchend', () => { touching = false; }, { passive: true });
+  scroller.addEventListener('touchcancel', () => { touching = false; }, { passive: true });
+  scroller.addEventListener('scroll', () => {
+    const top = scroller.scrollTop;
+    if (echoTop !== null && Math.abs(top - echoTop) < 1) { echoTop = null; return; }
+    echoTop = null;
+    if (scroller.dataset.mode === 'history') return moveTo(top, true);
+    // App mode: turn the movement into wheel lines for the app.
+    wheelAcc += top - lastTop;
+    lastTop = top;
+    const lines = Math.trunc(wheelAcc / cellH());
+    if (!lines) return;
+    wheelAcc -= lines * cellH();
+    const r = screenEl.getBoundingClientRect();
+    screenEl.dispatchEvent(new WheelEvent('wheel', { // xterm listens on the screen, not its root
+      deltaY: lines, deltaMode: WheelEvent.DOM_DELTA_LINE, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2,
+      bubbles: true, cancelable: true,
+    }));
+  }, { passive: true });
+  // Taps select text (see selection below); in ⌨ mode they also keep the keyboard up.
+  scroller.addEventListener('click', (e) => { onTap(e); if (direct) term.focus(); });
+}
+
+function moveTo(px, fromScroller = false) {
+  const h = cellH(), max = maxPx();
+  if (Math.abs(px - max) < 0.5) px = max; // the bottom is exactly the bottom
+  scrollPx = px;
+  const line = Math.max(0, Math.min(term.buffer.active.baseY, Math.floor(Math.max(0, Math.min(max, px)) / h + 1e-6)));
+  pendingShift = px - line * h;
+  if (Math.abs(pendingShift) < 0.25) pendingShift = 0;
+  if (line !== term.buffer.active.viewportY) {
+    ourLine = line;
+    term.scrollToLine(line); // the shift is applied when xterm renders the new line
+  } else {
+    applyShift();
+  }
+  if (!fromScroller) syncScroller();
+}
+
+function applyShift() {
+  if (!screenEl || pendingShift === shiftApplied) return;
+  shiftApplied = pendingShift;
+  screenEl.style.transform = shiftApplied ? `translateY(${-shiftApplied}px)` : '';
+  $('#term').classList.toggle('scrolled', !atBottom());
+  placeSelectionUi();
+}
+
+// Keep the native layer the right size and, unless a finger is on it, at the right place.
+function syncScroller(force = false) {
+  $('#term').classList.toggle('scrolled', !atBottom());
+  if (!scroller) return;
+  const history = localHistory();
+  const mode = history ? 'history' : 'app';
+  if (scroller.dataset.mode !== mode) { scroller.dataset.mode = mode; force = true; }
+  if (history) {
+    spacer.style.height = scroller.clientHeight + maxPx() + 'px';
+    const want = Math.round(scrollPx);
+    if (!touching && Math.abs(scroller.scrollTop - want) > 1) setTop(want);
+  } else if (force) {
+    // Park in the middle at the start of each touch, so a fling never hits an end.
+    spacer.style.height = BIG + 'px';
+    setTop(BIG / 2);
+    lastTop = scroller.scrollTop;
+    wheelAcc = 0;
+  }
+}
+
+function setTop(v) {
+  scroller.scrollTop = v;
+  echoTop = scroller.scrollTop;
+}
+
+// ================= selection =================
+//
+// Phones: tap a word to select it, tap three times for the whole paragraph, then drag the
+// handles at either end to change it. The view scrolls when a handle gets near the top or
+// bottom. The bar above the selection copies it. Computers: xterm's own mouse selection
+// (drag, double-click a word) plus triple-click for the paragraph.
+
+const DEFAULT_SEPARATORS = ' ()[]{}\',"`';
+let sel = null;                  // { start: {row, col}, end: {row, col} }: buffer rows, end exclusive
+let taps = { n: 0, t: 0, x: 0, y: 0 };
+let dragging = null;             // { which: 'start' | 'end', x, y } while a handle is held
+
+function cellAt(x, y) {
+  const r = screenEl.getBoundingClientRect(), buf = term.buffer.active;
+  const col = Math.max(0, Math.min(term.cols - 1, Math.floor((x - r.left) / (r.width / term.cols))));
+  const row = buf.viewportY + Math.floor((y - r.top) / cellH());
+  return { col, row: Math.max(0, Math.min(buf.length - 1, row)) };
+}
+
+// A row together with the rows it wraps onto, as one string of `cols`-wide pieces.
+function logicalLine(row) {
+  const buf = term.buffer.active;
+  let start = row, end = row;
+  while (start > 0 && buf.getLine(start)?.isWrapped) start--;
+  while (buf.getLine(end + 1)?.isWrapped) end++;
+  let text = '';
+  for (let r = start; r <= end; r++) text += (buf.getLine(r)?.translateToString(false) ?? '').padEnd(term.cols).slice(0, term.cols);
+  return { start, end, text };
+}
+const posIn = (line, i) => ({ row: line.start + Math.floor(i / term.cols), col: i % term.cols });
+const indexIn = (line, cell) => (cell.row - line.start) * term.cols + cell.col;
+const isWordChar = (ch) => !!ch && !/\s/.test(ch) && !(term.options.wordSeparator ?? DEFAULT_SEPARATORS).includes(ch);
+
+function selectWord(cell) {
+  const line = logicalLine(cell.row), i = indexIn(line, cell);
+  if (!isWordChar(line.text[i])) return false;
+  let a = i, b = i + 1;
+  while (a > 0 && isWordChar(line.text[a - 1])) a--;
+  while (b < line.text.length && isWordChar(line.text[b])) b++;
+  setSelection(posIn(line, a), posIn(line, b));
+  return true;
+}
+
+// Consecutive non-blank lines around the cell.
+function selectParagraph(cell, ui = true) {
+  const blank = (l) => !l.text.trim();
+  let first = logicalLine(cell.row);
+  if (blank(first)) return false;
+  let last = first;
+  for (let l; first.start > 0 && !blank(l = logicalLine(first.start - 1));) first = l;
+  for (let l; last.end < term.buffer.active.length - 1 && !blank(l = logicalLine(last.end + 1));) last = l;
+  setSelection({ row: first.start, col: 0 }, posIn(last, last.text.trimEnd().length), ui);
+  return true;
+}
+
+function setSelection(a, b, ui = true) {
+  if (a.row > b.row || (a.row === b.row && a.col > b.col)) [a, b] = [b, a];
+  const length = (b.row - a.row) * term.cols + b.col - a.col;
+  if (length <= 0) return;
+  sel = ui ? { start: a, end: b } : null;
+  term.select(a.col, a.row, length);
+  placeSelectionUi();
+}
+
+function clearSelection() {
+  sel = null;
+  term.clearSelection();
+  placeSelectionUi();
+}
+
+function onTap(e) {
+  const now = performance.now();
+  const again = now - taps.t < 450 && Math.hypot(e.clientX - taps.x, e.clientY - taps.y) < 30;
+  taps = { n: Math.max(e.detail || 1, again ? taps.n + 1 : 1), t: now, x: e.clientX, y: e.clientY };
+  const cell = cellAt(e.clientX, e.clientY);
+  if (taps.n >= 3) { selectParagraph(cell); return; }
+  if (taps.n === 1 && !selectWord(cell)) clearSelection();
+}
+
+// Handles and the copy bar follow the selection as the terminal scrolls.
+function placeSelectionUi() {
+  const handles = [$('#sel-start'), $('#sel-end')], bar = $('#sel-bar');
+  if (!sel || !screenEl) { handles.forEach((h) => (h.hidden = true)); bar.hidden = true; return; }
+  const t = $('#term').getBoundingClientRect(), r = screenEl.getBoundingClientRect();
+  const cw = r.width / term.cols, h = cellH(), top = r.top - t.top, left = r.left - t.left;
+  const vY = term.buffer.active.viewportY;
+  const sx = left + sel.start.col * cw, sy = top + (sel.start.row - vY) * h;
+  const ex = left + sel.end.col * cw, ey = top + (sel.end.row - vY + 1) * h;
+  const visible = (y) => y > -h && y < t.height + h;
+  place(handles[0], sx, sy, visible(sy + h));
+  place(handles[1], ex, ey - h, visible(ey - h)); // its caret covers the last selected row
+  // The bar sits above the selection, or below it when there's no room.
+  bar.hidden = false;
+  const bw = bar.offsetWidth, bh = bar.offsetHeight;
+  const by = sy - bh - 14 > 8 ? sy - bh - 14 : Math.min(ey + 22, t.height - bh - 8);
+  bar.style.transform = `translate(${Math.max(8, Math.min(t.width - bw - 8, (sx + ex) / 2 - bw / 2))}px, ${Math.max(8, by)}px)`;
+  function place(el, x, y, show) {
+    el.hidden = !show;
+    el.style.transform = `translate(${x}px, ${y}px)`;
+    el.style.height = h + 'px';
+  }
+}
+
+function installSelection() {
+  // Desktop: triple-click selects the paragraph (xterm's own would select just the line).
+  term.element.addEventListener('mouseup', (e) => {
+    if (e.detail === 3 && e.button === 0) setTimeout(() => selectParagraph(cellAt(e.clientX, e.clientY), false));
+  });
+  // Selections xterm drops on its own (new output over it, buffer switch) take the UI with them.
+  term.onSelectionChange(() => { if (sel && !term.hasSelection()) { sel = null; placeSelectionUi(); } });
+
+  $('#sel-copy').addEventListener('click', () => { copyText(term.getSelection()); clearSelection(); });
+  $('#sel-all').addEventListener('click', () => {
+    const buf = term.buffer.active, last = buf.length - 1;
+    setSelection({ row: 0, col: 0 }, posIn(logicalLine(last), logicalLine(last).text.trimEnd().length));
+  });
+
+  for (const which of ['start', 'end']) {
+    const el = $(`#sel-${which}`);
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      el.setPointerCapture(e.pointerId);
+      dragging = { which, x: e.clientX, y: e.clientY };
+      autoScroll();
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      dragging.x = e.clientX; dragging.y = e.clientY;
+      dragHandle();
+    });
+    const stop = () => { dragging = null; };
+    el.addEventListener('pointerup', stop);
+    el.addEventListener('pointercancel', stop);
+  }
+}
+
+// The start knob sits above the text and the end knob below it, so aim a little away from the
+// finger: it lands on the text the handle points at, not under the fingertip.
+function dragHandle() {
+  if (!dragging || !sel) return;
+  const h = cellH();
+  const cell = cellAt(dragging.x, dragging.y + (dragging.which === 'start' ? h * 0.7 : -h * 0.7));
+  let { start, end } = sel;
+  if (dragging.which === 'start') start = cell;
+  else end = { row: cell.row, col: cell.col + 1 };
+  // Dragged past the other end: they swap roles.
+  if (start.row > end.row || (start.row === end.row && start.col >= end.col)) {
+    [start, end] = dragging.which === 'start' ? [sel.end, { row: cell.row, col: cell.col + 1 }] : [cell, sel.start];
+    dragging.which = dragging.which === 'start' ? 'end' : 'start';
+  }
+  setSelection(start, end);
+}
+
+// Near the top or bottom edge, keep scrolling while the handle is held there.
+function autoScroll() {
+  if (!dragging) return;
+  const t = $('#term').getBoundingClientRect(), edge = 48;
+  const over = dragging.y < t.top + edge ? dragging.y - (t.top + edge) : dragging.y > t.bottom - edge ? dragging.y - (t.bottom - edge) : 0;
+  if (over && localHistory()) {
+    moveTo(Math.max(0, Math.min(maxPx(), scrollPx + over * 0.25)));
+    dragHandle();
+  }
+  requestAnimationFrame(autoScroll);
 }
 
 // ================= connection =================
@@ -183,7 +448,7 @@ function connect() {
   sock.onclose = (e) => {
     if (ws !== sock || !wantConnected) return;
     if (e.code === 4404) {
-      const name = meta?.command || 'The instance';
+      const name = meta ? nameOf(meta) : 'The instance';
       disconnect();
       instanceId = null;
       return showHome({ note: e.reason === 'no such instance' ? `${name} is no longer running.` : `${name} ${e.reason}.` });
@@ -206,8 +471,65 @@ let meta = null;
 function onStatus(msg) {
   meta = msg;
   hideBanner();
-  setState('on', msg.command);
-  $('#menu-head').innerHTML = `<b>${esc(msg.command)}</b><br>${esc(msg.cmd)}<br>${esc(msg.cwd)} · ${plural(msg.clients, 'viewer')}`;
+  setState('on', nameOf(msg));
+  if (!$('#mh-name input')) $('#mh-program').textContent = nameOf(msg);
+  $('#mh-viewers').textContent = plural(msg.clients, 'viewer');
+  $('#mh-where').textContent = msg.name ? `${msg.program || msg.command} · ${whereOf(msg)}` : whereOf(msg);
+  $('.mh-scratch').hidden = !msg.scratch; // an older server has no scratch folders
+  markOldServer(!msg.scratch);
+  $('#mh-scratch').textContent = msg.scratchName || '';
+  $('#mh-scratch').title = msg.scratch || '';
+  if ($('#home').hidden) document.title = `${nameOf(msg)} · ${lastTwo(whereOf(msg))}`;
+}
+
+// "~/nk/remote-terminal" → "nk/remote-terminal"
+const lastTwo = (p = '') => (p === '~' || p === '/' ? p : p.split('/').filter(Boolean).slice(-2).join('/'));
+// What to call a terminal: the name the user gave it, or else what runs in it.
+const nameOf = (x) => x.name || x.program || x.command;
+const whereOf = (x) => x.where || x.cwd || '';
+// The line under the name: what runs there (once it has a name of its own) and the folder.
+const detailOf = (x) => [x.name ? x.program || x.command : '', lastTwo(whereOf(x))].filter(Boolean).join(' · ');
+
+// Rename a terminal in place: `el` turns into a text field. Enter or leaving it saves, Escape cancels.
+// An empty name goes back to showing the program.
+let renaming = null;
+
+// A server started before names and folder suggestions existed still serves this page (it reads
+// the files from disk). Hide what it can't do, and say so on Home.
+function markOldServer(old) {
+  document.body.classList.toggle('old-server', old);
+  $('#home-upgrade').hidden = !old;
+}
+function renameInline(el, x, done) {
+  const input = document.createElement('input');
+  Object.assign(input, { className: 'rename', value: x.name || '', placeholder: x.program || x.command, maxLength: 60, enterKeyHint: 'done', spellcheck: false });
+  input.setAttribute('aria-label', `Name for ${nameOf(x)}`);
+  input.setAttribute('autocomplete', 'off');
+  renaming = x.id;
+  el.hidden = true;
+  el.after(input);
+  input.focus();
+  input.select();
+  let finished = false;
+  const finish = async (save) => {
+    if (finished) return;
+    finished = true;
+    const name = input.value.trim();
+    if (save && name !== (x.name || '')) {
+      try { Object.assign(x, await api('PATCH', `/api/instances/${encodeURIComponent(x.id)}`, { name })); }
+      catch (err) { toast(err.message === 'not found' ? 'Restart the server to rename terminals' : `Couldn’t rename: ${err.message}`); }
+    }
+    renaming = null;
+    input.remove();
+    el.hidden = false;
+    done(x);
+  };
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
 }
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
@@ -250,10 +572,52 @@ function wakeHud() {
 ['pointerdown', 'keydown'].forEach((ev) => addEventListener(ev, wakeHud, { passive: true }));
 
 const menu = $('#menu');
+let menuTimer;
 function toggleMenu(open = menu.hidden) {
   menu.hidden = !open;
   $('#status').setAttribute('aria-expanded', open);
+  clearInterval(menuTimer);
+  if (open) { refreshMenuTerms(); menuTimer = setInterval(refreshMenuTerms, 2000); }
 }
+
+function showTab(tab) {
+  for (const b of menu.querySelectorAll('[data-tab]')) b.setAttribute('aria-selected', b.dataset.tab === tab);
+  for (const p of menu.querySelectorAll('[data-panel]')) p.hidden = p.dataset.panel !== tab;
+  store.set('menuTab', tab);
+}
+showTab(store.get('menuTab', 'terms'));
+menu.querySelector('.tabs').addEventListener('click', (e) => { const t = e.target.closest('[data-tab]'); if (t) showTab(t.dataset.tab); });
+
+const ICON_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+const ICON_FOLDER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>';
+const ICON_FILE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"/><path d="M14 3v6h6"/></svg>';
+const ICON_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+
+// The other terminals, to switch to, copy their scratch path, or open their files.
+let terms = [];
+async function refreshMenuTerms() {
+  try { terms = (await api('GET', '/api/state')).instances; } catch { return; }
+  if (meta && !$('#mh-name input')) { const me = terms.find((x) => x.id === instanceId); if (me) onStatus({ ...meta, ...me }); } // renamed elsewhere
+  const others = terms.filter((x) => x.id !== instanceId);
+  const html = others.length ? others.map((x) => `
+    <div class="mt">
+      <button class="mt-open" data-switch="${esc(x.id)}">
+        <span class="dot" data-state="on"></span>
+        <span class="s-main"><b>${esc(nameOf(x))}</b><small>${esc(detailOf(x))} · ${ago(x.created)}</small></span>
+      </button>
+      ${x.scratch ? `<button class="ghost-icon" data-copy="${esc(x.scratch)}" aria-label="Copy the scratch path of ${esc(nameOf(x))}" title="Copy scratch path">${ICON_COPY}</button>
+      <button class="ghost-icon" data-files="${esc(x.scratchName)}" aria-label="Files of ${esc(nameOf(x))}" title="Files">${ICON_FOLDER}</button>` : ''}
+    </div>`).join('') : '<div class="empty">No other terminals.</div>';
+  const box = $('#menu-terms');
+  if (box.dataset.html !== html) box.innerHTML = box.dataset.html = html;
+}
+$('#menu-terms').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.switch) { toggleMenu(false); attach(b.dataset.switch); }
+  if (b.dataset.copy) copyText(b.dataset.copy);
+  if (b.dataset.files) { toggleMenu(false); openFiles(b.dataset.files); }
+});
 $('#status').addEventListener('click', (e) => { e.stopPropagation(); toggleMenu(); });
 document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !$('#hud').contains(e.target)) toggleMenu(false); });
 
@@ -274,6 +638,8 @@ menu.addEventListener('click', (e) => {
   const act = e.target.closest('[data-act]')?.dataset.act;
   if (!act) return;
   if (act === 'font+') { fontSize++; applyFontSize(); return; }
+  if (act === 'copy-scratch') { if (meta) copyText(meta.scratch); return; }
+  if (act === 'rename') { if (meta && !$('#mh-name input')) renameInline($('#mh-program'), { ...meta }, (x) => onStatus({ ...meta, ...x })); return; }
   if (act === 'font-') { fontSize--; applyFontSize(); return; }
   toggleMenu(false);
   if (act === 'home') showHome();
@@ -284,6 +650,7 @@ menu.addEventListener('click', (e) => {
   if (act === 'redraw') { term.clear(); sendInput('\x0c'); }
   if (act === 'copy') openCopy();
   if (act === 'paste') pasteClipboard();
+  if (act === 'files' && meta) openFiles(meta.scratchName);
 });
 
 // ================= copy / paste =================
@@ -576,6 +943,98 @@ async function openTerminal() {
   showHome();
 }
 
+// ================= files: the shared scratch area =================
+//
+// ~/.remote-terminal-server/scratch, with a folder per terminal (also in $REMOTE_TERM_SCRATCH
+// inside it). Upload from this device, download, delete, and copy a folder's path to paste
+// into a terminal.
+
+let scratchRoot = '';
+let filesPath = '';               // relative to the scratch root
+let confirmDelete = null;
+
+const fileUrl = (rel) => `/api/files/download?path=${encodeURIComponent(rel)}`;
+const join = (...parts) => parts.filter(Boolean).join('/');
+function size(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  return `${(n / 1024 ** 3).toFixed(1)} GB`;
+}
+
+async function openFiles(rel = '') {
+  filesPath = rel;
+  confirmDelete = null;
+  $('#files').hidden = false;
+  await renderFiles();
+}
+function closeFiles() { $('#files').hidden = true; }
+
+async function renderFiles() {
+  $('#files-error').textContent = '';
+  let data;
+  try { data = await api('GET', `/api/files?path=${encodeURIComponent(filesPath)}`); }
+  catch (err) {
+    if (filesPath) { filesPath = filesPath.split('/').slice(0, -1).join('/'); return renderFiles(); } // gone: go up
+    $('#files-error').textContent = err.message; return;
+  }
+  scratchRoot = data.root;
+  // At the top, say which terminal each folder belongs to.
+  if (!filesPath) try { terms = (await api('GET', '/api/state')).instances; } catch {}
+  const owner = (name) => terms.find((x) => x.scratchName === name);
+  const t = filesPath && owner(filesPath.split('/')[0]);
+  $('#files-name').textContent = filesPath ? (t ? `${nameOf(t)} · ${filesPath}` : filesPath) : 'Shared scratch';
+  $('#files-path').textContent = join(scratchRoot, filesPath) + '\u200e'; // LRM: the path is trimmed from the left (rtl) but reads left to right
+  $('#files-up').style.visibility = filesPath ? 'visible' : 'hidden';
+  $('#files-list').innerHTML = data.entries.length ? data.entries.map((f) => {
+    const rel = join(filesPath, f.name), x = !filesPath && f.dir && owner(f.name);
+    const info = f.dir ? (filesPath ? 'folder' : x ? `running · ${detailOf(x)}` : 'ended') : `${size(f.size)} · ${ago(f.mtime)}`;
+    const open = f.dir
+      ? `<button class="f-open dir" data-dir="${esc(rel)}">${ICON_FOLDER}<span class="s-main"><b>${esc(x ? `${nameOf(x)} (${f.name})` : f.name)}</b><small>${esc(info)}</small></span></button>`
+      : `<a class="f-open" href="${fileUrl(rel)}" download="${esc(f.name)}">${ICON_FILE}<span class="s-main"><b>${esc(f.name)}</b><small>${esc(info)}</small></span></a>`;
+    return `<div class="f-row">${open}
+      <button class="ghost-icon" data-copy="${esc(join(scratchRoot, rel))}" aria-label="Copy path" title="Copy path">${ICON_COPY}</button>
+      <button class="ghost-icon danger${confirmDelete === rel ? ' confirm' : ''}" data-del="${esc(rel)}" aria-label="Delete ${esc(f.name)}">${confirmDelete === rel ? 'Delete?' : ICON_X}</button>
+    </div>`;
+  }).join('') : `<div class="empty">${filesPath ? 'Empty. Upload a file, or save one here from the terminal.' : 'No folders yet. Each terminal gets one when it starts.'}</div>`;
+}
+
+async function upload(fileList) {
+  const list = [...fileList];
+  if (!list.length) return;
+  for (const [i, file] of list.entries()) {
+    toast(list.length > 1 ? `Uploading ${i + 1}/${list.length}…` : `Uploading ${file.name}…`);
+    const res = await fetch(`/api/files/upload?path=${encodeURIComponent(filesPath)}&name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file });
+    if (!res.ok) { $('#files-error').textContent = (await res.json().catch(() => ({}))).error || 'Upload failed'; break; }
+  }
+  toast(list.length > 1 ? `Uploaded ${list.length} files` : 'Uploaded');
+  renderFiles();
+}
+
+$('#files-list').addEventListener('click', async (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.dir) { filesPath = b.dataset.dir; confirmDelete = null; return renderFiles(); }
+  if (b.dataset.copy) return copyText(b.dataset.copy);
+  if (b.dataset.del) {
+    if (confirmDelete !== b.dataset.del) { confirmDelete = b.dataset.del; return renderFiles(); }
+    confirmDelete = null;
+    try { await api('DELETE', `/api/files?path=${encodeURIComponent(b.dataset.del)}`); } catch (err) { $('#files-error').textContent = err.message; }
+    renderFiles();
+  }
+});
+$('#files-up').addEventListener('click', () => { filesPath = filesPath.split('/').slice(0, -1).join('/'); renderFiles(); });
+$('#files-close').addEventListener('click', closeFiles);
+$('#files').addEventListener('click', (e) => { if (e.target.id === 'files') closeFiles(); });
+$('#files-copy').addEventListener('click', () => copyText(join(scratchRoot, filesPath)));
+$('#files-input').addEventListener('change', (e) => { upload(e.target.files); e.target.value = ''; });
+$('#home-files').addEventListener('click', () => openFiles(''));
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#files').hidden) closeFiles(); });
+// Desktop: drop files on the panel.
+for (const t of ['dragenter', 'dragover']) $('#files').addEventListener(t, (e) => { e.preventDefault(); $('#files').classList.add('dragover'); });
+$('#files').addEventListener('dragleave', (e) => { if (e.target.id === 'files') $('#files').classList.remove('dragover'); });
+$('#files').addEventListener('drop', (e) => { e.preventDefault(); $('#files').classList.remove('dragover'); upload(e.dataTransfer.files); });
+
 // ================= home: instances + commands =================
 
 let instanceId = null;
@@ -584,6 +1043,118 @@ let confirmKill = null, confirmTimer = null; // a kill needs a second tap within
 const cwdInput = $('#cwd');
 cwdInput.value = store.get('cwd', '');
 cwdInput.addEventListener('change', () => store.set('cwd', cwdInput.value.trim()));
+
+// ---- "start in": folder suggestions as you type ----
+// Up to 10 folders that match what's typed. Picking one fills it in (ending in "/"), so the
+// next level shows right away; keep typing or picking to go deeper.
+const cwdList = $('#cwd-list');
+let cwdItems = [], cwdActive = -1, cwdSeq = 0, cwdTimer;
+const dirs = (q, limit = 10) => api('GET', `/api/dirs?q=${encodeURIComponent(q)}&limit=${limit}`);
+
+async function suggestDirs() {
+  const seq = ++cwdSeq;
+  let data;
+  try { data = await dirs(cwdInput.value); } catch { return closeSuggest(); } // e.g. an older server
+  if (seq !== cwdSeq || document.activeElement !== cwdInput) return;
+  cwdItems = data.dirs;
+  cwdActive = -1;
+  if (!cwdItems.length) return closeSuggest();
+  cwdList.innerHTML = cwdItems.map((d, i) =>
+    `<button type="button" role="option" data-i="${i}" tabindex="-1">${ICON_FOLDER}<span><bdi>${esc(d)}</bdi></span></button>`).join('')
+    + (data.total > cwdItems.length ? `<div class="more">${data.total - cwdItems.length} more · keep typing</div>` : '');
+  cwdList.hidden = false;
+  cwdInput.setAttribute('aria-expanded', 'true');
+}
+function closeSuggest() {
+  clearTimeout(cwdTimer); // typed just before Escape: don't reopen
+  cwdSeq++;
+  cwdList.hidden = true;
+  cwdInput.setAttribute('aria-expanded', 'false');
+}
+function markActive(i) {
+  cwdActive = i;
+  cwdList.querySelectorAll('[data-i]').forEach((b) => b.classList.toggle('active', +b.dataset.i === i));
+  cwdList.querySelector('.active')?.scrollIntoView({ block: 'nearest' });
+}
+function pickDir(d) {
+  cwdInput.value = d;
+  store.set('cwd', d);
+  cwdInput.focus();
+  suggestDirs();
+}
+cwdInput.addEventListener('input', () => { clearTimeout(cwdTimer); cwdTimer = setTimeout(suggestDirs, 120); });
+cwdInput.addEventListener('focus', suggestDirs);
+cwdInput.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== cwdInput) closeSuggest(); }, 150));
+cwdInput.addEventListener('keydown', (e) => {
+  const open = !cwdList.hidden && cwdItems.length;
+  if (e.key === 'ArrowDown' && open) { e.preventDefault(); markActive((cwdActive + 1) % cwdItems.length); }
+  else if (e.key === 'ArrowUp' && open) { e.preventDefault(); markActive((cwdActive - 1 + cwdItems.length) % cwdItems.length); }
+  else if (e.key === 'Tab' && open && !e.shiftKey) { e.preventDefault(); pickDir(cwdItems[Math.max(0, cwdActive)]); }
+  else if (e.key === 'Enter' && open && cwdActive >= 0) { e.preventDefault(); pickDir(cwdItems[cwdActive]); }
+  else if (e.key === 'Enter') { closeSuggest(); cwdInput.blur(); }
+  else if (e.key === 'Escape') { if (open) e.preventDefault(); closeSuggest(); } // also drops a request in flight
+});
+// pointerdown, not click: keeps the field focused (and the phone keyboard up).
+cwdList.addEventListener('pointerdown', (e) => {
+  const b = e.target.closest('[data-i]');
+  if (!b) return;
+  e.preventDefault();
+  pickDir(cwdItems[+b.dataset.i]);
+});
+
+// ---- "start in": a folder browser ----
+let pickerPath = '';
+async function openPicker() {
+  closeSuggest();
+  const v = cwdInput.value.trim();
+  pickerPath = v && !v.endsWith('/') ? v + '/' : v; // start where the field points
+  $('#picker').hidden = false;
+  $('#picker-filter').value = '';
+  await renderPicker();
+}
+function closePicker() { $('#picker').hidden = true; }
+async function renderPicker() {
+  let data;
+  try { data = await dirs(pickerPath, 1000); }
+  catch (err) { $('#picker-list').innerHTML = `<div class="empty">${esc(err.message)}</div>`; return; }
+  if (!data.exists && pickerPath) { pickerPath = ''; return renderPicker(); } // a typo: start from the default folder
+  pickerPath = data.path.endsWith('/') ? data.path : data.path + '/';
+  $('#picker-name').textContent = lastTwo(data.path) || data.path;
+  $('#picker-path').textContent = data.path + '‎';
+  $('#picker-up').style.visibility = data.parent ? 'visible' : 'hidden';
+  $('#picker-up').dataset.to = data.parent || '';
+  const f = $('#picker-filter').value.trim().toLowerCase();
+  const names = data.dirs.map((d) => d.slice(0, -1).split('/').pop()).filter((n) => n.toLowerCase().includes(f))
+    .sort((a, b) => !a.toLowerCase().startsWith(f) - !b.toLowerCase().startsWith(f)); // "bet": beta before alphabet
+  $('#picker-list').innerHTML = names.length ? names.map((n) =>
+    `<div class="f-row"><button class="f-open dir" data-enter="${esc(n)}">${ICON_FOLDER}<span class="s-main"><b>${esc(n)}</b></span></button></div>`).join('')
+    : `<div class="empty">${f ? 'No folders match.' : 'No folders inside.'}</div>`;
+  $('#picker-list').scrollTop = 0;
+}
+$('#cwd-browse').addEventListener('click', (e) => { e.preventDefault(); openPicker(); });
+$('#picker-close').addEventListener('click', closePicker);
+$('#picker').addEventListener('click', (e) => { if (e.target.id === 'picker') closePicker(); });
+$('#picker-up').addEventListener('click', () => { pickerPath = $('#picker-up').dataset.to + '/'; $('#picker-filter').value = ''; renderPicker(); });
+$('#picker-list').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-enter]');
+  if (!b) return;
+  pickerPath += b.dataset.enter + '/';
+  $('#picker-filter').value = '';
+  renderPicker();
+});
+$('#picker-filter').addEventListener('input', renderPicker);
+$('#picker-filter').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const first = $('#picker-list [data-enter]');
+  if (first) first.click();
+});
+$('#picker-use').addEventListener('click', () => {
+  const p = pickerPath.replace(/(.)\/$/, '$1'); // "~/nk/api/" → "~/nk/api"
+  cwdInput.value = p;
+  store.set('cwd', p);
+  closePicker();
+});
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#picker').hidden) closePicker(); });
 
 async function api(method, url, body) {
   const res = await fetch(url, {
@@ -599,6 +1170,7 @@ async function showHome({ note = '' } = {}) {
   $('#home-error').textContent = '';
   $('#home-close').hidden = !(instanceId && wantConnected);
   $('#home').hidden = false;
+  document.title = 'Remote Terminal';
   clearInterval(homeTimer);
   homeTimer = setInterval(() => refreshHome({ poll: true }), 2500);
   await refreshHome();
@@ -616,20 +1188,29 @@ async function refreshHome({ poll = false } = {}) {
   if ($('#home').hidden) return;
   if ($('#home-error').textContent === 'Can’t reach the server.') $('#home-error').textContent = '';
   cwdInput.placeholder = state.defaultCwd;
+  scratchRoot = state.scratchRoot;
+  markOldServer(!state.scratchRoot);
+  $('#home-files-path').textContent = state.scratchRoot;
+  for (const el of [$('#home-files'), $('.home-files-h')]) el.hidden = !state.scratchRoot; // an older server has no files
   renderInstances(state.instances);
   renderCommands(state.commands);
 }
 
+let homeList = [];
+const ICON_EDIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 function renderInstances(list) {
+  homeList = list;
+  if (renaming) return; // don't wipe the name being typed
   const box = $('#instance-list');
   const confirming = confirmKill;
   const html = list.length ? list.map((x) => `
     <div class="session" aria-current="${x.id === instanceId}">
       <button class="s-open" data-join="${esc(x.id)}">
         <span class="dot" data-state="on"></span>
-        <span class="s-main"><b>${esc(x.command)}</b><small>${esc(x.cwd)}</small></span>
+        <span class="s-main"><b>${esc(nameOf(x))}</b><small>${esc(detailOf(x))}</small></span>
         <span class="s-meta">${ago(x.created)}<br>${plural(x.clients, 'viewer')}</span>
       </button>
+      <button class="s-rename" data-rename="${esc(x.id)}" aria-label="Rename ${esc(nameOf(x))}" title="Rename">${ICON_EDIT}</button>
       <button class="s-kill${x.id === confirming ? ' confirm' : ''}" data-kill="${esc(x.id)}" aria-label="Kill ${esc(x.command)}">
         ${x.id === confirming ? 'Kill?' : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'}
       </button>
@@ -656,6 +1237,12 @@ function attach(id) {
 }
 
 $('#instance-list').addEventListener('click', async (e) => {
+  const ren = e.target.closest('[data-rename]');
+  if (ren) {
+    const x = homeList.find((y) => y.id === ren.dataset.rename);
+    if (x && !renaming) renameInline(ren.closest('.session').querySelector('.s-main b'), x, () => refreshHome());
+    return;
+  }
   const kill = e.target.closest('[data-kill]');
   if (kill) {
     const id = kill.dataset.kill;

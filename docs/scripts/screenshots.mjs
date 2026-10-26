@@ -201,6 +201,8 @@ try {
       method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ command, cwd }),
     }).then((r) => r.json());
     const bash = await start('bash', '~/code/my-app');
+    fs.writeFileSync(path.join(bash.scratch, 'release-notes.md'), '# my-app 1.4\n\n- Cache user settings\n- Fix login redirect on Safari\n');
+    fs.writeFileSync(path.join(bash.scratch, 'screenshot.png'), Buffer.alloc(48_213));
     await sleep(300);
     const dev = await start('my-app dev');
 
@@ -236,9 +238,30 @@ try {
     await page.screenshot({ path: path.join(OUT, 'console-terminal.png') });
     console.log('  docs/images/console-terminal.png');
 
+    // Selection: tap a word three times for its paragraph.
+    const cell = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.xterm-rows > div')];
+      const i = rows.findIndex((r) => r.textContent.includes('Fix login redirect'));
+      const b = rows[i].getBoundingClientRect();
+      return { x: b.left + 120, y: b.top + b.height / 2 };
+    });
+    const cdp = await ctx.newCDPSession(page);
+    for (let i = 0; i < 3; i++) {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [cell] });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await sleep(60);
+    }
+    await sleep(500);
+    await page.screenshot({ path: path.join(OUT, 'console-select.png') });
+    console.log('  docs/images/console-select.png');
+    await page.click('#sel-copy'); await sleep(1800);
+
     await page.click('#status'); await sleep(500);
     await page.screenshot({ path: path.join(OUT, 'console-menu.png') });
     console.log('  docs/images/console-menu.png');
+    await page.click('[data-act=files]'); await sleep(800);
+    await page.screenshot({ path: path.join(OUT, 'console-files.png') });
+    console.log('  docs/images/console-files.png');
     await ctx.close();
 
     // Desktop: the same terminal, viewed from a second browser at the same time
