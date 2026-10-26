@@ -64,6 +64,9 @@ svg { width: 20px; height: 20px; display: block; }
 .ghost-icon:hover { color: var(--text); background: var(--raised); }
 .sub { margin: 0; color: var(--warn); font-size: 13px; }
 .sub:empty { display: none; }
+.upgrade { margin: 0; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.45; color: var(--warn); background: rgba(240, 190, 100, 0.08); border: 1px solid rgba(240, 190, 100, 0.25); }
+.upgrade code { font: 12px var(--mono); }
+.old-server .s-rename, .old-server [data-act="rename"], .old-server #cwd-browse { display: none; }
 .card h2 { margin: 6px 2px -2px; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 
 .session-list { display: flex; flex-direction: column; gap: 8px; }

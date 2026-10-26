@@ -476,6 +476,7 @@ function onStatus(msg) {
   $('#mh-viewers').textContent = plural(msg.clients, 'viewer');
   $('#mh-where').textContent = msg.name ? `${msg.program || msg.command} · ${whereOf(msg)}` : whereOf(msg);
   $('.mh-scratch').hidden = !msg.scratch; // an older server has no scratch folders
+  markOldServer(!msg.scratch);
   $('#mh-scratch').textContent = msg.scratchName || '';
   $('#mh-scratch').title = msg.scratch || '';
   if ($('#home').hidden) document.title = `${nameOf(msg)} · ${lastTwo(whereOf(msg))}`;
@@ -492,6 +493,13 @@ const detailOf = (x) => [x.name ? x.program || x.command : '', lastTwo(whereOf(x
 // Rename a terminal in place: `el` turns into a text field. Enter or leaving it saves, Escape cancels.
 // An empty name goes back to showing the program.
 let renaming = null;
+
+// A server started before names and folder suggestions existed still serves this page (it reads
+// the files from disk). Hide what it can't do, and say so on Home.
+function markOldServer(old) {
+  document.body.classList.toggle('old-server', old);
+  $('#home-upgrade').hidden = !old;
+}
 function renameInline(el, x, done) {
   const input = document.createElement('input');
   Object.assign(input, { className: 'rename', value: x.name || '', placeholder: x.program || x.command, maxLength: 60, enterKeyHint: 'done', spellcheck: false });
@@ -1181,6 +1189,7 @@ async function refreshHome({ poll = false } = {}) {
   if ($('#home-error').textContent === 'Can’t reach the server.') $('#home-error').textContent = '';
   cwdInput.placeholder = state.defaultCwd;
   scratchRoot = state.scratchRoot;
+  markOldServer(!state.scratchRoot);
   $('#home-files-path').textContent = state.scratchRoot;
   for (const el of [$('#home-files'), $('.home-files-h')]) el.hidden = !state.scratchRoot; // an older server has no files
   renderInstances(state.instances);
