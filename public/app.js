@@ -1106,8 +1106,7 @@ cwdList.addEventListener('pointerdown', (e) => {
 let pickerPath = '';
 async function openPicker() {
   closeSuggest();
-  const v = cwdInput.value.trim();
-  pickerPath = v && !v.endsWith('/') ? v + '/' : v; // start where the field points
+  pickerPath = '~/'; // always start from the home folder
   $('#picker').hidden = false;
   $('#picker-filter').value = '';
   await renderPicker();
