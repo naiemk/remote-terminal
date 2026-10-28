@@ -17,6 +17,7 @@ import { isAutoResponse } from '../shared/input.js';
 import { ensureConfig } from './config.js';
 import { createFiles } from './files.js';
 import { foreground } from './procinfo.js';
+import { createConsoles } from './consoles.js';
 import { createManager } from './manager.js';
 import { createManagerServer } from './manager-http.js';
 
@@ -253,10 +254,24 @@ function sendTo(id, text) {
   return { ok: true };
 }
 
+function proxy(req, res, port, target) {
+  const up = http.request({ host: BIND, port, method: req.method, path: target, headers: req.headers }, (r) => {
+    res.writeHead(r.statusCode, r.headers);
+    r.pipe(res);
+  });
+  up.on('error', () => { if (!res.headersSent) sendJson(res, 502, { error: 'console unavailable' }); else res.destroy(); });
+  res.on('close', () => up.destroy());
+  req.pipe(up);
+}
+
+const GUIDE = path.join(CONFIG_DIR, 'AGENT_GUIDE.md'); // what agents are told about (see manager "Tell agents")
+try { fs.copyFileSync(path.join(ROOT, 'server', 'agent-guide.md'), GUIDE); } catch {}
+const consoles = createConsoles(path.join(CONFIG_DIR, 'consoles'), [PORT, MANAGER_PORT]);
+
 let managerHttp;
 const manager = createManager(instances, () => managerHttp?.broadcast());
 managerHttp = createManagerServer({
-  manager, dir: path.join(PUBLIC_DIR, 'manager'), port: MANAGER_PORT, checkRequest, sendTo, readBody,
+  manager, guide: GUIDE, dir: path.join(PUBLIC_DIR, 'manager'), port: MANAGER_PORT, checkRequest, sendTo, readBody,
 });
 
 // ---------- http ----------
@@ -270,7 +285,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/state') {
     const commands = Object.entries(loadCommands()).map(([name, s]) => ({ name, cmd: s.cmd, cwd: s.cwd }));
     const list = [...instances.values()].map(instanceInfo).sort((a, b) => a.created - b.created);
-    return sendJson(res, 200, { commands, instances: list, defaultCwd: tildify(DEFAULT_CWD), scratchRoot: files.root });
+    return sendJson(res, 200, { commands, instances: list, defaultCwd: tildify(DEFAULT_CWD), scratchRoot: files.root, consoles: consoles.list(), manager: { running: manager.isRunning() } });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/instances') {
@@ -300,18 +315,17 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 404, { error: 'not found' });
   }
 
-  // The dashboard, reached through this server's own address (so it works wherever this app does).
-  // Opening it starts the manager if it isn't running.
-  if (url.pathname === '/manager') { res.writeHead(302, { Location: '/manager/' }); return res.end(); }
+  // Web consoles: the manager dashboard, and anything other agents registered (see consoles.js).
+  // Reached through this server's own address; opening the manager's starts it if needed.
+  if (url.pathname === '/manager' || /^\/c\/[\w-]+$/.test(url.pathname)) { res.writeHead(302, { Location: url.pathname + '/' }); return res.end(); }
   if (url.pathname.startsWith('/manager/')) {
     if (url.pathname === '/manager/' && req.method === 'GET' && !manager.isRunning()) manager.start();
-    const up = http.request({ host: BIND, port: MANAGER_PORT, method: req.method, path: url.pathname.slice(8) + url.search, headers: req.headers }, (r) => {
-      res.writeHead(r.statusCode, r.headers);
-      r.pipe(res);
-    });
-    up.on('error', () => { if (!res.headersSent) sendJson(res, 502, { error: 'manager unavailable' }); else res.destroy(); });
-    res.on('close', () => up.destroy());
-    return req.pipe(up);
+    return proxy(req, res, MANAGER_PORT, url.pathname.slice(8) + url.search);
+  }
+  const cm = url.pathname.match(/^\/c\/([\w-]+)(\/.*)$/);
+  if (cm) {
+    const port = consoles.port(cm[1]);
+    return port ? proxy(req, res, port, cm[2] + url.search) : sendJson(res, 404, { error: 'no such console' });
   }
 
   if (url.pathname === '/api/manager') {

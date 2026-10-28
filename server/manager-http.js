@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
-export function createManagerServer({ manager, dir, port, checkRequest, sendTo, readBody }) {
+export function createManagerServer({ manager, guide, dir, port, checkRequest, sendTo, readBody }) {
   const clients = new Set();
   const ev = (res, e) => res.write(`data: ${JSON.stringify(e)}\n\n`);
   const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs });
@@ -35,7 +35,12 @@ export function createManagerServer({ manager, dir, port, checkRequest, sendTo, 
       const text = String(b.text || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 2000);
       let result = { ok: true };
       if ((b.action === 'ask_agent' || b.action === 'answer') && text) result = sendTo(t, text);
-      else if (b.action === 'refresh') manager.poll();
+      else if (b.action === 'inform_agents') {
+        // Only idle agents inside our terminals: typing into a busy or waiting one would mangle its prompt.
+        const idle = manager.fleet().sessions.filter((s) => s.terminal && s.status === 'idle');
+        for (const s of idle) sendTo(s.terminal, `FYI: Remote Terminal can list web consoles you host and lets a manager agent reach you. Read ${guide} for how. No reply needed.`);
+        result = { ok: true, told: idle.length };
+      } else if (b.action === 'refresh') manager.poll();
       else if (b.action === 'message' && text) manager.message(text);
       else if (b.action === 'start') manager.start();
       else if (b.action === 'stop') manager.stop();

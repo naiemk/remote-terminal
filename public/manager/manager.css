@@ -14,3 +14,4 @@ h1{font-size:18px;margin:0}.pill{font-size:12px;color:var(--mut)}.dot{display:in
 button,.btn{font:inherit;color:var(--fg);background:var(--line);border:0;border-radius:10px;padding:8px 12px}
 .row{display:flex;gap:8px;margin-top:8px}.row input,#msg input{flex:1;min-width:0;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
 #msg{display:flex;gap:8px;margin-top:16px}#bar{display:flex;gap:8px;margin-bottom:8px}
+#more{padding:2px 10px;margin-right:8px}#more-menu{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px;margin-bottom:8px}#more-menu button{width:100%;text-align:left}

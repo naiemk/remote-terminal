@@ -1192,7 +1192,8 @@ async function refreshHome({ poll = false } = {}) {
   $('#home-files-path').textContent = state.scratchRoot;
   for (const el of [$('#home-files'), $('.home-files-h')]) el.hidden = !state.scratchRoot; // an older server has no files
   renderInstances(state.instances);
-  renderCommands(state.commands);
+  renderCommands(state.commands, state.manager);
+  renderConsoles(state.consoles || [], state.manager);
 }
 
 let homeList = [];
@@ -1217,11 +1218,25 @@ function renderInstances(list) {
   if (box.dataset.html !== html) box.innerHTML = box.dataset.html = html; // don't disturb a tap in progress
 }
 
-function renderCommands(list) {
+function renderCommands(list, manager) {
   const box = $('#command-list');
+  // Claude Manager is a singleton: one button that starts it if needed and opens it, never a second copy.
+  const mgrBtn = manager ? `
+    <button class="cmd" data-mgr="1"><b>Claude Manager</b><small>${manager.running ? 'running · open dashboard' : 'watches your agents'}</small></button>` : '';
   const html = list.map((c) => `
-    <button class="cmd" data-cmd="${esc(c.name)}"><b>${esc(c.name)}</b><small>${esc(c.cmd)}</small></button>`).join('');
+    <button class="cmd" data-cmd="${esc(c.name)}"><b>${esc(c.name)}</b><small>${esc(c.cmd)}</small></button>`).join('') + mgrBtn;
   if (box.dataset.html !== html) box.innerHTML = box.dataset.html = html; // don't disturb a tap in progress
+}
+
+function renderConsoles(list, manager) {
+  const box = $('#console-list');
+  const row = (href, name, desc, on) => `
+    <div class="session"><a class="s-open" href="${esc(href)}" target="_blank" rel="noopener">
+      <span class="dot" data-state="${on ? 'on' : 'off'}"></span>
+      <span class="s-main"><b>${esc(name)}</b><small>${esc(desc)}</small></span></a></div>`;
+  const html = (manager ? row('/manager/', 'Claude Manager', manager.running ? 'running' : 'starts when opened', manager.running) : '')
+    + list.map((c) => row(c.url, c.name, c.description || 'web console', true)).join('');
+  if (box.dataset.html !== html) box.innerHTML = box.dataset.html = html;
 }
 
 function attach(id) {
@@ -1264,6 +1279,13 @@ $('#instance-list').addEventListener('click', async (e) => {
 });
 
 $('#command-list').addEventListener('click', async (e) => {
+  if (e.target.closest('[data-mgr]')) {
+    // Open the tab synchronously (popup rules), then make sure the manager is running.
+    const w = window.open('/manager/', '_blank');
+    try { await api('POST', '/api/manager', { on: true }); } catch {}
+    if (!w) location.href = '/manager/';
+    return setTimeout(refreshHome, 600);
+  }
   const btn = e.target.closest('[data-cmd]');
   if (!btn || btn.disabled) return;
   btn.disabled = true;

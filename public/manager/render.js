@@ -76,3 +76,12 @@ function go() {
 }
 $('msg').onsubmit = (e) => { e.preventDefault(); const i = e.target.t; if (i.value.trim()) { act('message', {}, i.value); i.value = ''; } };
 go();
+
+$('more').onclick = () => { $('more-menu').hidden = !$('more-menu').hidden; };
+$('more-menu').onclick = async (e) => {
+  const m = e.target.dataset.m; if (!m) return;
+  $('more-menu').hidden = true;
+  const r = await fetch('api/act', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: m }) });
+  const j = await r.json().catch(() => ({}));
+  $('summary').textContent = r.ok ? `Told ${j.told} idle agent(s).` : (j.error || 'failed');
+};
