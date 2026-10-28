@@ -577,7 +577,7 @@ function toggleMenu(open = menu.hidden) {
   menu.hidden = !open;
   $('#status').setAttribute('aria-expanded', open);
   clearInterval(menuTimer);
-  if (open) { refreshMenuTerms(); menuTimer = setInterval(refreshMenuTerms, 2000); }
+  if (open) { refreshManager(); refreshMenuTerms(); menuTimer = setInterval(refreshMenuTerms, 2000); }
 }
 
 function showTab(tab) {
@@ -1284,3 +1284,18 @@ $('#home-close').addEventListener('click', () => { hideHome(); if (!isTouch) ter
 
 store.del('token'); store.del('session'); // left over from the password / rterm days
 openTerminal();
+// /#<terminal id> opens that terminal (the manager dashboard links here).
+{ const id = decodeURIComponent(location.hash.slice(1)); if (/^[\w-]{1,32}$/.test(id)) { history.replaceState(null, '', location.pathname); attach(id); } }
+
+// Manager tab: start/stop the manager and open its dashboard (its own port; open it in the same
+// tailscale host, e.g. https://<host>:<port>, where `tailscale serve` publishes it).
+const mgrOpen = $('#mgr-open'), mgrToggle = $('#mgr-toggle'), mgrState = $('#mgr-state');
+let mgr = null;
+async function refreshManager() {
+  try { mgr = await api('GET', '/api/manager'); } catch { return; }
+  mgrState.textContent = mgr.running ? 'Running' : 'Off';
+  mgrToggle.textContent = mgr.running ? 'Stop manager' : 'Start manager';
+  mgrOpen.href = store.get('mgrUrl', '') || `${location.protocol}//${location.hostname}:${mgr.port}/?app=${encodeURIComponent(location.origin)}`;
+}
+mgrToggle.addEventListener('click', async () => { try { mgr = await api('POST', '/api/manager', { on: !mgr?.running }); } catch {} refreshManager(); });
+refreshManager();

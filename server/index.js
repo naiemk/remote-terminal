@@ -17,6 +17,8 @@ import { isAutoResponse } from '../shared/input.js';
 import { ensureConfig } from './config.js';
 import { createFiles } from './files.js';
 import { foreground } from './procinfo.js';
+import { createManager } from './manager.js';
+import { createManagerServer } from './manager-http.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -237,6 +239,26 @@ function notifyStatus(x) {
   for (const c of x.clients) if (c.readyState === 1) c.send(msg);
 }
 
+// ---------- manager ----------
+
+const MANAGER_PORT = Number(process.env.MANAGER_PORT || PORT + 1);
+
+// Type a message into one of our terminals and press Enter (the text first, then Enter a moment
+// later, so a TUI treats it as typed input rather than part of a paste).
+function sendTo(id, text) {
+  const x = instances.get(id);
+  if (!x) return { ok: false, error: 'not a terminal of this server' };
+  x.pty.write(text);
+  setTimeout(() => { if (instances.has(x.id)) { x.pty.write('\r'); clearTimeout(x.detectTimer); x.detectTimer = setTimeout(() => detect(x), 400); } }, 300);
+  return { ok: true };
+}
+
+let managerHttp;
+const manager = createManager(instances, () => managerHttp?.broadcast());
+managerHttp = createManagerServer({
+  manager, dir: path.join(PUBLIC_DIR, 'manager'), port: MANAGER_PORT, checkRequest, sendTo, readBody,
+});
+
 // ---------- http ----------
 
 const server = http.createServer(async (req, res) => {
@@ -276,6 +298,15 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, err.status || 500, { error: err.status ? err.message : 'failed' });
     }
     return sendJson(res, 404, { error: 'not found' });
+  }
+
+  if (url.pathname === '/api/manager') {
+    if (req.method === 'POST') {
+      let body = {};
+      try { body = JSON.parse(await readBody(req)); } catch {}
+      if (body.on === true) manager.start(); else if (body.on === false) manager.stop();
+    }
+    return sendJson(res, 200, { running: manager.isRunning(), port: MANAGER_PORT });
   }
 
   const m = url.pathname.match(/^\/api\/instances\/([\w-]+)$/);
@@ -379,5 +410,6 @@ server.on('error', (err) => {
   process.exit(1);
 });
 export const listening = new Promise((resolve) => server.listen(PORT, BIND, () => {
+  managerHttp.listen();
   resolve({ port: PORT, configDir: CONFIG_DIR });
 }));

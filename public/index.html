@@ -152,11 +152,17 @@
           </div>
           <div class="tabs" role="tablist">
             <button role="tab" data-tab="terms" aria-selected="true">Terminals</button>
+            <button role="tab" data-tab="manager" aria-selected="false">Manager</button>
             <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
           </div>
           <div class="tab-panel" data-panel="terms" role="tabpanel">
             <div id="menu-terms" class="menu-terms"></div>
             <button class="menu-item" data-act="home">New terminal…</button>
+          </div>
+          <div class="tab-panel" data-panel="manager" role="tabpanel" hidden>
+            <div class="menu-row"><span>Claude manager: <b id="mgr-state">…</b></span></div>
+            <a class="menu-item" id="mgr-open" target="_blank" rel="noopener">Open dashboard</a>
+            <button class="menu-item" id="mgr-toggle">Start manager</button>
           </div>
           <div class="tab-panel" data-panel="settings" role="tabpanel" hidden>
             <div class="menu-row">
