@@ -940,7 +940,10 @@ async function openTerminal() {
   onViewport();
   doFit();
   wakeHud();
-  showHome();
+  // /#<terminal id> opens that terminal (the manager dashboard links here); otherwise the home screen.
+  const id = decodeURIComponent(location.hash.slice(1));
+  if (/^[\w-]{1,32}$/.test(id)) { history.replaceState(null, '', location.pathname); attach(id); }
+  else showHome();
 }
 
 // ================= files: the shared scratch area =================
@@ -1306,8 +1309,6 @@ $('#home-close').addEventListener('click', () => { hideHome(); if (!isTouch) ter
 
 store.del('token'); store.del('session'); // left over from the password / rterm days
 openTerminal();
-// /#<terminal id> opens that terminal (the manager dashboard links here).
-{ const id = decodeURIComponent(location.hash.slice(1)); if (/^[\w-]{1,32}$/.test(id)) { history.replaceState(null, '', location.pathname); attach(id); } }
 
 // Manager tab: start/stop the manager and open its dashboard (served at /manager/ by this server).
 const mgrOpen = $('#mgr-open'), mgrToggle = $('#mgr-toggle'), mgrState = $('#mgr-state');

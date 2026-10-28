@@ -12,6 +12,7 @@ export function validateSpec(node, depth = 0) {
     case 'stack': return { type: 'stack', children: kids() };
     case 'stats': return { type: 'stats', items: (Array.isArray(node.items) ? node.items : []).slice(0, 6).map((i) => ({ label: str(i?.label, 30), value: str(String(i?.value ?? ''), 30) })) };
     case 'card': return { type: 'card', title: str(node.title, 100), subtitle: str(node.subtitle, 200), badge: str(node.badge, 20), text: str(node.text, 600), children: kids() };
+    case 'session': return /^[\w-]{1,12}$/.test(node.id || '') ? { type: 'session', id: node.id } : null; // drawn live from the fleet, so it never goes stale
     case 'text': return { type: 'text', text: str(node.text, 800) };
     case 'list': return { type: 'list', items: (Array.isArray(node.items) ? node.items : []).slice(0, 20).map((s) => str(s, 200)) };
     case 'button': return action() ? { type: 'button', label: str(node.label, 40), action: action(), args: args() } : null;

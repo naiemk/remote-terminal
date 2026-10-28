@@ -10,7 +10,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 export function createManagerServer({ manager, guide, dir, port, checkRequest, sendTo, readBody }) {
   const clients = new Set();
   const ev = (res, e) => res.write(`data: ${JSON.stringify(e)}\n\n`);
-  const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs });
+  const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs, busy: manager.state.busy, log: manager.state.log });
 
   const broadcast = () => { const s = view(); for (const r of clients) ev(r, { type: 'STATE_SNAPSHOT', snapshot: s }); };
 
@@ -34,7 +34,12 @@ export function createManagerServer({ manager, guide, dir, port, checkRequest, s
       const t = String(b.args?.terminal || '');
       const text = String(b.text || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 2000);
       let result = { ok: true };
-      if ((b.action === 'ask_agent' || b.action === 'answer') && text) result = sendTo(t, text);
+      if ((b.action === 'ask_agent' || b.action === 'answer') && text) {
+        result = sendTo(t, text);
+        const name = manager.fleet().sessions.find((x) => x.terminal === t)?.name || t;
+        manager.note(result.ok ? 'sent' : 'manager', result.ok ? `To ${name}: ${text}` : `Could not reach ${name}: ${result.error}`);
+        manager.poll();
+      }
       else if (b.action === 'inform_agents') {
         // Only idle agents inside our terminals: typing into a busy or waiting one would mangle its prompt.
         const idle = manager.fleet().sessions.filter((s) => s.terminal && s.status === 'idle');
