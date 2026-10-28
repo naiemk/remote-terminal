@@ -1287,15 +1287,14 @@ openTerminal();
 // /#<terminal id> opens that terminal (the manager dashboard links here).
 { const id = decodeURIComponent(location.hash.slice(1)); if (/^[\w-]{1,32}$/.test(id)) { history.replaceState(null, '', location.pathname); attach(id); } }
 
-// Manager tab: start/stop the manager and open its dashboard (its own port; open it in the same
-// tailscale host, e.g. https://<host>:<port>, where `tailscale serve` publishes it).
+// Manager tab: start/stop the manager and open its dashboard (served at /manager/ by this server).
 const mgrOpen = $('#mgr-open'), mgrToggle = $('#mgr-toggle'), mgrState = $('#mgr-state');
 let mgr = null;
 async function refreshManager() {
   try { mgr = await api('GET', '/api/manager'); } catch { return; }
   mgrState.textContent = mgr.running ? 'Running' : 'Off';
   mgrToggle.textContent = mgr.running ? 'Stop manager' : 'Start manager';
-  mgrOpen.href = store.get('mgrUrl', '') || `${location.protocol}//${location.hostname}:${mgr.port}/?app=${encodeURIComponent(location.origin)}`;
+  mgrOpen.href = '/manager/'; // proxied by this server; it starts the manager if needed
 }
 mgrToggle.addEventListener('click', async () => { try { mgr = await api('POST', '/api/manager', { on: !mgr?.running }); } catch {} refreshManager(); });
 refreshManager();

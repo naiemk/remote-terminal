@@ -5,7 +5,7 @@ const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
 let last = null;
 
 async function act(action, args, text) {
-  const r = await fetch('/api/act', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, args, text }) });
+  const r = await fetch('api/act', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, args, text }) });
   if (!r.ok) $('err').textContent = (await r.json().catch(() => ({}))).error || 'failed';
 }
 
@@ -69,7 +69,7 @@ function render(s) {
 }
 
 function go() {
-  const es = new EventSource('/events');
+  const es = new EventSource('events');
   es.onopen = () => { $('dot').className = 'dot'; $('conn').textContent = 'live'; };
   es.onerror = () => { $('dot').className = 'dot off'; $('conn').textContent = 'reconnecting'; };
   es.onmessage = (e) => { const v = JSON.parse(e.data); if (v.type === 'STATE_SNAPSHOT') { const f = document.activeElement; if (!(f && f.tagName === 'INPUT' && f.value)) render(v.snapshot); } };

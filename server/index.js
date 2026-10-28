@@ -300,6 +300,20 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 404, { error: 'not found' });
   }
 
+  // The dashboard, reached through this server's own address (so it works wherever this app does).
+  // Opening it starts the manager if it isn't running.
+  if (url.pathname === '/manager') { res.writeHead(302, { Location: '/manager/' }); return res.end(); }
+  if (url.pathname.startsWith('/manager/')) {
+    if (url.pathname === '/manager/' && req.method === 'GET' && !manager.isRunning()) manager.start();
+    const up = http.request({ host: BIND, port: MANAGER_PORT, method: req.method, path: url.pathname.slice(8) + url.search, headers: req.headers }, (r) => {
+      res.writeHead(r.statusCode, r.headers);
+      r.pipe(res);
+    });
+    up.on('error', () => { if (!res.headersSent) sendJson(res, 502, { error: 'manager unavailable' }); else res.destroy(); });
+    res.on('close', () => up.destroy());
+    return req.pipe(up);
+  }
+
   if (url.pathname === '/api/manager') {
     if (req.method === 'POST') {
       let body = {};
