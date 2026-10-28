@@ -21,6 +21,18 @@ On the first run, `remote-terminal-server` checks for Tailscale, offers to run `
 
 <p align="center"><img src="docs/images/cli-ready.png" width="640" alt="remote-terminal-server ready"></p>
 
+## Upgrade
+
+```bash
+remote-terminal-server update
+```
+
+This runs the installer again and fetches the latest version. Your settings in `~/.remote-terminal-server/` (`commands.json`, `.env`) are kept.
+
+Then **restart the server** so it picks up the new code: stop the running `remote-terminal-server` (Ctrl+C, or stop the service if you [keep it running](docs/guides/keep-running.md)) and start it again. Running terminals end when the server stops. Reload the page on your phone afterwards.
+
+If `update` isn't available (an older install), run the install command above again; it does the same thing. Check the installed version with `remote-terminal-server doctor`.
+
 ## Documentation
 
 **[naiemk.gitbook.io/remote-terminal](https://naiemk.gitbook.io/remote-terminal)** (source in [`docs/`](docs/README.md))
