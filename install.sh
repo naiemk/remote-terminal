@@ -128,6 +128,10 @@ main() {
       || die "Download failed: https://github.com/$REPO (ref $REF)."
   fi
   [ -f "$tmp/app/bin/remote-terminal-server" ] || die "That doesn't look like remote-terminal-server."
+  # Remember which commit this is, so the server can tell when a newer one exists.
+  if [ -z "${REMOTE_TERMINAL_SOURCE:-}" ]; then
+    curl -fsSL -H 'Accept: application/vnd.github.sha' "https://api.github.com/repos/$REPO/commits/$REF" >"$tmp/app/.version" 2>/dev/null || rm -f "$tmp/app/.version"
+  fi
 
   # ---------- dependencies ----------
   step "Installing dependencies (this compiles the terminal module on Linux; it takes a minute)"

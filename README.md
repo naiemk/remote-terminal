@@ -23,6 +23,10 @@ On the first run, `remote-terminal-server` checks for Tailscale, offers to run `
 
 ## Upgrade
 
+From the web page: open the menu, go to **Settings**, and tap **Upgrade to …** when it shows one. The server reinstalls itself, restarts, and the page reloads. Running terminals end. This needs a version that has the button; older installs use the command below once.
+
+From a shell:
+
 ```bash
 remote-terminal-server update
 ```

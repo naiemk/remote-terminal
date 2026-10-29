@@ -577,7 +577,7 @@ function toggleMenu(open = menu.hidden) {
   menu.hidden = !open;
   $('#status').setAttribute('aria-expanded', open);
   clearInterval(menuTimer);
-  if (open) { refreshManager(); refreshMenuTerms(); menuTimer = setInterval(refreshMenuTerms, 2000); }
+  if (open) { refreshManager(); refreshUpdate(); refreshMenuTerms(); menuTimer = setInterval(refreshMenuTerms, 2000); }
 }
 
 function showTab(tab) {
@@ -1321,3 +1321,25 @@ async function refreshManager() {
 }
 mgrToggle.addEventListener('click', async () => { try { mgr = await api('POST', '/api/manager', { on: !mgr?.running }); } catch {} refreshManager(); });
 refreshManager();
+
+// Settings tab: upgrade the server in place. It reinstalls, restarts (terminals end) and we reload.
+const updBtn = $('#upd-btn'), updState = $('#upd-state');
+let upd = null;
+async function refreshUpdate(force) {
+  try { upd = await api('GET', '/api/update' + (force ? '?force=1' : '')); } catch { return; }
+  updState.textContent = upd.installed || upd.version;
+  updBtn.textContent = upd.available ? `Upgrade to ${upd.latest}` : upd.latest ? 'Up to date · check again' : 'Check for updates';
+}
+updBtn.addEventListener('click', async () => {
+  if (!upd?.available) return refreshUpdate(true);
+  let n = 0;
+  try { n = (await api('GET', '/api/state')).instances.length; } catch {}
+  if (!confirm(`Upgrade and restart the server?${n ? ` Your ${n} running terminal${n > 1 ? 's' : ''} will end.` : ''}`)) return;
+  updBtn.disabled = true; updBtn.textContent = 'Upgrading… (about a minute)';
+  try { await api('POST', '/api/update'); } catch (err) { updBtn.disabled = false; updBtn.textContent = 'Upgrade failed: ' + err.message; return; }
+  updBtn.textContent = 'Restarting…';
+  const t = setInterval(async () => {
+    try { await api('GET', '/api/state'); clearInterval(t); location.reload(); } catch {}
+  }, 1500);
+});
+refreshUpdate();

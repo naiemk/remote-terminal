@@ -20,6 +20,7 @@ import { foreground } from './procinfo.js';
 import { createConsoles } from './consoles.js';
 import { createManager } from './manager.js';
 import { createManagerServer } from './manager-http.js';
+import { createUpdater } from './updater.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -268,6 +269,10 @@ const GUIDE = path.join(CONFIG_DIR, 'AGENT_GUIDE.md'); // what agents are told a
 try { fs.copyFileSync(path.join(ROOT, 'server', 'agent-guide.md'), GUIDE); } catch {}
 const consoles = createConsoles(path.join(CONFIG_DIR, 'consoles'), [PORT, MANAGER_PORT]);
 
+const updater = createUpdater({
+  root: ROOT, shutdown: (code) => shutdown(code),
+  version: JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version,
+});
 let managerHttp;
 const manager = createManager(instances, () => managerHttp?.broadcast());
 managerHttp = createManagerServer({
@@ -326,6 +331,17 @@ const server = http.createServer(async (req, res) => {
   if (cm) {
     const port = consoles.port(cm[1]);
     return port ? proxy(req, res, port, cm[2] + url.search) : sendJson(res, 404, { error: 'no such console' });
+  }
+
+  // GET: installed vs latest. POST: run the installer, answer, then restart onto the new code.
+  if (url.pathname === '/api/update') {
+    if (req.method === 'POST') {
+      const r = await updater.run();
+      if (!r.ok) return sendJson(res, 500, { error: 'Upgrade failed', output: r.output });
+      sendJson(res, 200, { ok: true });
+      return res.end(() => setTimeout(() => updater.restart(), 300));
+    }
+    return sendJson(res, 200, await updater.status(url.searchParams.has('force')));
   }
 
   if (url.pathname === '/api/manager') {
@@ -425,12 +441,11 @@ setInterval(() => {
 }, 25_000);
 
 // Instances are children of the server; take them down with it.
-for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => {
-    for (const x of instances.values()) try { x.pty.kill('SIGHUP'); } catch {}
-    process.exit(0);
-  });
+function shutdown(code = 0) {
+  for (const x of instances.values()) try { x.pty.kill('SIGHUP'); } catch {}
+  process.exit(code);
 }
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => shutdown(0));
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') console.error(`Port ${PORT} is already in use. Is remote-terminal-server already running? Pick another with --port.`);
