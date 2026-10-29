@@ -3,22 +3,26 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const HOME = path.join(os.homedir(), '.claude');
 const tildify = (p) => (p || '').replace(os.homedir(), '~');
 
-const alive = (pid) => fs.existsSync(`/proc/${pid}`);
-
-function ppid(pid) {
+// One `ps` call gives every process's parent; works on Linux and macOS (there is no /proc on macOS).
+function parents() {
+  const map = new Map();
   try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    return Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
-  } catch { return 0; }
+    for (const l of execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 5000 }).split('\n')) {
+      const [pid, ppid] = l.trim().split(/\s+/).map(Number);
+      if (pid) map.set(pid, ppid);
+    }
+  } catch {}
+  return map;
 }
 
 // Is `pid` the process `root`, or one of its descendants?
-export function descendsFrom(pid, root) {
-  for (let p = pid, i = 0; p > 1 && i < 40; p = ppid(p), i++) if (p === root) return true;
+export function descendsFrom(pid, root, map = parents()) {
+  for (let p = pid, i = 0; p > 1 && i < 40; p = map.get(p) || 0, i++) if (p === root) return true;
   return false;
 }
 
@@ -70,12 +74,13 @@ export function activity(sessionId) {
 // (`terminal`) so it can be talked to and opened. Others are visible but read-only.
 export function snapshot(instances) {
   const sessions = [];
+  const procs = parents();
   let files = [];
   try { files = fs.readdirSync(path.join(HOME, 'sessions')).filter((f) => f.endsWith('.json')); } catch {}
   for (const f of files) {
     let s; try { s = JSON.parse(fs.readFileSync(path.join(HOME, 'sessions', f), 'utf8')); } catch { continue; }
-    if (s.kind !== 'interactive' || !s.pid || !alive(s.pid)) continue;
-    const owner = [...instances.values()].find((x) => descendsFrom(s.pid, x.pty.pid));
+    if (s.kind !== 'interactive' || !s.pid || !procs.has(s.pid)) continue;
+    const owner = [...instances.values()].find((x) => descendsFrom(s.pid, x.pty.pid, procs));
     sessions.push({
       id: String(s.sessionId).slice(0, 8), name: s.name || path.basename(s.cwd || '') || String(s.pid),
       status: s.status || 'unknown', cwd: tildify(s.cwd), started: s.startedAt / 1000, updated: (s.updatedAt || 0) / 1000,
