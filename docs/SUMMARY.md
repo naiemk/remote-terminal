@@ -11,6 +11,7 @@
 ## Guides
 
 * [Using the console](guides/console.md)
+* [Claude manager](guides/manager.md)
 * [Commands (commands.json)](guides/commands.md)
 * [Keep it running](guides/keep-running.md)
 

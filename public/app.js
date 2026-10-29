@@ -577,7 +577,7 @@ function toggleMenu(open = menu.hidden) {
   menu.hidden = !open;
   $('#status').setAttribute('aria-expanded', open);
   clearInterval(menuTimer);
-  if (open) { refreshMenuTerms(); menuTimer = setInterval(refreshMenuTerms, 2000); }
+  if (open) { refreshManager(); refreshUpdate(); refreshMenuTerms(); menuTimer = setInterval(refreshMenuTerms, 2000); }
 }
 
 function showTab(tab) {
@@ -940,7 +940,10 @@ async function openTerminal() {
   onViewport();
   doFit();
   wakeHud();
-  showHome();
+  // /#<terminal id> opens that terminal (the manager dashboard links here); otherwise the home screen.
+  const id = decodeURIComponent(location.hash.slice(1));
+  if (/^[\w-]{1,32}$/.test(id)) { history.replaceState(null, '', location.pathname); attach(id); }
+  else showHome();
 }
 
 // ================= files: the shared scratch area =================
@@ -1192,7 +1195,8 @@ async function refreshHome({ poll = false } = {}) {
   $('#home-files-path').textContent = state.scratchRoot;
   for (const el of [$('#home-files'), $('.home-files-h')]) el.hidden = !state.scratchRoot; // an older server has no files
   renderInstances(state.instances);
-  renderCommands(state.commands);
+  renderCommands(state.commands, state.manager);
+  renderConsoles(state.consoles || [], state.manager);
 }
 
 let homeList = [];
@@ -1217,11 +1221,25 @@ function renderInstances(list) {
   if (box.dataset.html !== html) box.innerHTML = box.dataset.html = html; // don't disturb a tap in progress
 }
 
-function renderCommands(list) {
+function renderCommands(list, manager) {
   const box = $('#command-list');
+  // Claude Manager is a singleton: one button that starts it if needed and opens it, never a second copy.
+  const mgrBtn = manager ? `
+    <button class="cmd" data-mgr="1"><b>Claude Manager</b><small>${manager.running ? 'running · open dashboard' : 'watches your agents'}</small></button>` : '';
   const html = list.map((c) => `
-    <button class="cmd" data-cmd="${esc(c.name)}"><b>${esc(c.name)}</b><small>${esc(c.cmd)}</small></button>`).join('');
+    <button class="cmd" data-cmd="${esc(c.name)}"><b>${esc(c.name)}</b><small>${esc(c.cmd)}</small></button>`).join('') + mgrBtn;
   if (box.dataset.html !== html) box.innerHTML = box.dataset.html = html; // don't disturb a tap in progress
+}
+
+function renderConsoles(list, manager) {
+  const box = $('#console-list');
+  const row = (href, name, desc, on) => `
+    <div class="session"><a class="s-open" href="${esc(href)}" target="_blank" rel="noopener">
+      <span class="dot" data-state="${on ? 'on' : 'off'}"></span>
+      <span class="s-main"><b>${esc(name)}</b><small>${esc(desc)}</small></span></a></div>`;
+  const html = (manager ? row('/manager/', 'Claude Manager', manager.running ? 'running' : 'starts when opened', manager.running) : '')
+    + list.map((c) => row(c.url, c.name, c.description || 'web console', true)).join('');
+  if (box.dataset.html !== html) box.innerHTML = box.dataset.html = html;
 }
 
 function attach(id) {
@@ -1264,6 +1282,13 @@ $('#instance-list').addEventListener('click', async (e) => {
 });
 
 $('#command-list').addEventListener('click', async (e) => {
+  if (e.target.closest('[data-mgr]')) {
+    // Open the tab synchronously (popup rules), then make sure the manager is running.
+    const w = window.open('/manager/', '_blank');
+    try { await api('POST', '/api/manager', { on: true }); } catch {}
+    if (!w) location.href = '/manager/';
+    return setTimeout(refreshHome, 600);
+  }
   const btn = e.target.closest('[data-cmd]');
   if (!btn || btn.disabled) return;
   btn.disabled = true;
@@ -1284,3 +1309,37 @@ $('#home-close').addEventListener('click', () => { hideHome(); if (!isTouch) ter
 
 store.del('token'); store.del('session'); // left over from the password / rterm days
 openTerminal();
+
+// Manager tab: start/stop the manager and open its dashboard (served at /manager/ by this server).
+const mgrOpen = $('#mgr-open'), mgrToggle = $('#mgr-toggle'), mgrState = $('#mgr-state');
+let mgr = null;
+async function refreshManager() {
+  try { mgr = await api('GET', '/api/manager'); } catch { return; }
+  mgrState.textContent = mgr.running ? 'Running' : 'Off';
+  mgrToggle.textContent = mgr.running ? 'Stop manager' : 'Start manager';
+  mgrOpen.href = '/manager/'; // proxied by this server; it starts the manager if needed
+}
+mgrToggle.addEventListener('click', async () => { try { mgr = await api('POST', '/api/manager', { on: !mgr?.running }); } catch {} refreshManager(); });
+refreshManager();
+
+// Settings tab: upgrade the server in place. It reinstalls, restarts (terminals end) and we reload.
+const updBtn = $('#upd-btn'), updState = $('#upd-state');
+let upd = null;
+async function refreshUpdate(force) {
+  try { upd = await api('GET', '/api/update' + (force ? '?force=1' : '')); } catch { return; }
+  updState.textContent = upd.installed || upd.version;
+  updBtn.textContent = upd.available ? `Upgrade to ${upd.latest}` : upd.latest ? 'Up to date · check again' : 'Check for updates';
+}
+updBtn.addEventListener('click', async () => {
+  if (!upd?.available) return refreshUpdate(true);
+  let n = 0;
+  try { n = (await api('GET', '/api/state')).instances.length; } catch {}
+  if (!confirm(`Upgrade and restart the server?${n ? ` Your ${n} running terminal${n > 1 ? 's' : ''} will end.` : ''}`)) return;
+  updBtn.disabled = true; updBtn.textContent = 'Upgrading… (about a minute)';
+  try { await api('POST', '/api/update'); } catch (err) { updBtn.disabled = false; updBtn.textContent = 'Upgrade failed: ' + err.message; return; }
+  updBtn.textContent = 'Restarting…';
+  const t = setInterval(async () => {
+    try { await api('GET', '/api/state'); clearInterval(t); location.reload(); } catch {}
+  }, 1500);
+});
+refreshUpdate();

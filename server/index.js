@@ -17,6 +17,10 @@ import { isAutoResponse } from '../shared/input.js';
 import { ensureConfig } from './config.js';
 import { createFiles } from './files.js';
 import { foreground } from './procinfo.js';
+import { createConsoles } from './consoles.js';
+import { createManager } from './manager.js';
+import { createManagerServer } from './manager-http.js';
+import { createUpdater } from './updater.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -237,6 +241,44 @@ function notifyStatus(x) {
   for (const c of x.clients) if (c.readyState === 1) c.send(msg);
 }
 
+// ---------- manager ----------
+
+const MANAGER_PORT = Number(process.env.MANAGER_PORT || PORT + 1);
+
+// Type a message into one of our terminals and press Enter (the text first, then Enter a moment
+// later, so a TUI treats it as typed input rather than part of a paste).
+function sendTo(id, text) {
+  const x = instances.get(id);
+  if (!x) return { ok: false, error: 'not a terminal of this server' };
+  x.pty.write(text);
+  setTimeout(() => { if (instances.has(x.id)) { x.pty.write('\r'); clearTimeout(x.detectTimer); x.detectTimer = setTimeout(() => detect(x), 400); } }, 300);
+  return { ok: true };
+}
+
+function proxy(req, res, port, target) {
+  const up = http.request({ host: BIND, port, method: req.method, path: target, headers: req.headers }, (r) => {
+    res.writeHead(r.statusCode, r.headers);
+    r.pipe(res);
+  });
+  up.on('error', () => { if (!res.headersSent) sendJson(res, 502, { error: 'console unavailable' }); else res.destroy(); });
+  res.on('close', () => up.destroy());
+  req.pipe(up);
+}
+
+const GUIDE = path.join(CONFIG_DIR, 'AGENT_GUIDE.md'); // what agents are told about (see manager "Tell agents")
+try { fs.copyFileSync(path.join(ROOT, 'server', 'agent-guide.md'), GUIDE); } catch {}
+const consoles = createConsoles(path.join(CONFIG_DIR, 'consoles'), [PORT, MANAGER_PORT]);
+
+const updater = createUpdater({
+  root: ROOT, shutdown: (code) => shutdown(code),
+  version: JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version,
+});
+let managerHttp;
+const manager = createManager(instances, () => managerHttp?.broadcast());
+managerHttp = createManagerServer({
+  manager, guide: GUIDE, dir: path.join(PUBLIC_DIR, 'manager'), port: MANAGER_PORT, checkRequest, sendTo, readBody,
+});
+
 // ---------- http ----------
 
 const server = http.createServer(async (req, res) => {
@@ -248,7 +290,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/state') {
     const commands = Object.entries(loadCommands()).map(([name, s]) => ({ name, cmd: s.cmd, cwd: s.cwd }));
     const list = [...instances.values()].map(instanceInfo).sort((a, b) => a.created - b.created);
-    return sendJson(res, 200, { commands, instances: list, defaultCwd: tildify(DEFAULT_CWD), scratchRoot: files.root });
+    return sendJson(res, 200, { commands, instances: list, defaultCwd: tildify(DEFAULT_CWD), scratchRoot: files.root, consoles: consoles.list(), manager: { running: manager.isRunning() } });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/instances') {
@@ -276,6 +318,39 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, err.status || 500, { error: err.status ? err.message : 'failed' });
     }
     return sendJson(res, 404, { error: 'not found' });
+  }
+
+  // Web consoles: the manager dashboard, and anything other agents registered (see consoles.js).
+  // Reached through this server's own address; opening the manager's starts it if needed.
+  if (url.pathname === '/manager' || /^\/c\/[\w-]+$/.test(url.pathname)) { res.writeHead(302, { Location: url.pathname + '/' }); return res.end(); }
+  if (url.pathname.startsWith('/manager/')) {
+    if (url.pathname === '/manager/' && req.method === 'GET' && !manager.isRunning()) manager.start();
+    return proxy(req, res, MANAGER_PORT, url.pathname.slice(8) + url.search);
+  }
+  const cm = url.pathname.match(/^\/c\/([\w-]+)(\/.*)$/);
+  if (cm) {
+    const port = consoles.port(cm[1]);
+    return port ? proxy(req, res, port, cm[2] + url.search) : sendJson(res, 404, { error: 'no such console' });
+  }
+
+  // GET: installed vs latest. POST: run the installer, answer, then restart onto the new code.
+  if (url.pathname === '/api/update') {
+    if (req.method === 'POST') {
+      const r = await updater.run();
+      if (!r.ok) return sendJson(res, 500, { error: 'Upgrade failed', output: r.output });
+      sendJson(res, 200, { ok: true });
+      return res.end(() => setTimeout(() => updater.restart(), 300));
+    }
+    return sendJson(res, 200, await updater.status(url.searchParams.has('force')));
+  }
+
+  if (url.pathname === '/api/manager') {
+    if (req.method === 'POST') {
+      let body = {};
+      try { body = JSON.parse(await readBody(req)); } catch {}
+      if (body.on === true) manager.start(); else if (body.on === false) manager.stop();
+    }
+    return sendJson(res, 200, { running: manager.isRunning(), port: MANAGER_PORT });
   }
 
   const m = url.pathname.match(/^\/api\/instances\/([\w-]+)$/);
@@ -366,12 +441,11 @@ setInterval(() => {
 }, 25_000);
 
 // Instances are children of the server; take them down with it.
-for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => {
-    for (const x of instances.values()) try { x.pty.kill('SIGHUP'); } catch {}
-    process.exit(0);
-  });
+function shutdown(code = 0) {
+  for (const x of instances.values()) try { x.pty.kill('SIGHUP'); } catch {}
+  process.exit(code);
 }
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => shutdown(0));
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') console.error(`Port ${PORT} is already in use. Is remote-terminal-server already running? Pick another with --port.`);
@@ -379,5 +453,6 @@ server.on('error', (err) => {
   process.exit(1);
 });
 export const listening = new Promise((resolve) => server.listen(PORT, BIND, () => {
+  managerHttp.listen();
   resolve({ port: PORT, configDir: CONFIG_DIR });
 }));

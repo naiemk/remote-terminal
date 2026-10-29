@@ -372,3 +372,4 @@ body.kb-open #sheet { padding-bottom: 12px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+a.s-open{color:inherit;text-decoration:none}
