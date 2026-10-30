@@ -28,7 +28,7 @@ function node(n, fleet) {
     case 'list': { const e = el('ul'); for (const i of n.items) e.append(el('li', '', i)); return e; }
     case 'button': {
       const b = el('button', '', n.label);
-      b.onclick = () => (n.action === 'open_console' ? window.open(consoleUrl(n.args.terminal), '_blank') : act(n.action, n.args));
+      b.onclick = () => (n.action === 'open_chat' ? (location.hash = '#/a/' + n.args.id) : n.action === 'open_console' ? window.open(consoleUrl(n.args.terminal), '_blank') : act(n.action, n.args));
       return b;
     }
     case 'input': {
@@ -49,9 +49,8 @@ const consoleUrl = (id) => `${app || location.origin}/#${encodeURIComponent(id)}
 
 // A live card for one session; the manager refers to it by id so status and latest text never go stale.
 function sessionCard(s) {
-  return { type: 'card', title: s.name, subtitle: s.cwd, badge: s.status, text: s.lastText || '', children: s.terminal ? [
-    { type: 'button', label: 'Open console', action: 'open_console', args: { terminal: s.terminal } },
-    { type: 'input', placeholder: 'Tell this agent…', action: 'ask_agent', args: { terminal: s.terminal } }] : [] };
+  return { type: 'card', title: s.name, subtitle: s.cwd, badge: s.status, text: s.lastText || '', children: [
+    { type: 'button', label: 'Chat', action: 'open_chat', args: { id: s.id } }] };
 }
 
 // What to show before the manager has designed anything, or when it is off.
@@ -63,8 +62,13 @@ function fallback(fleet) {
   ] };
 }
 
+function route() { const m = location.hash.match(/^#\/a\/([\w-]+)$/); return m ? m[1] : null; }
+
 function render(s) {
   last = s;
+  const id = route();
+  $('board').hidden = !!id; $('agent').hidden = !id;
+  if (id) return renderAgent(s, id);
   $('summary').textContent = s.summary || (s.running ? 'Manager is starting…' : 'Manager is off. Showing a plain overview.');
   $('err').textContent = s.error ? 'Manager error: ' + s.error : '';
   const bar = $('bar'); bar.replaceChildren();
@@ -87,6 +91,8 @@ function render(s) {
   log.replaceChildren(...(s.log || []).map((m) => el('div', 'm ' + m.who, m.text)));
   if (atEnd) log.lastChild?.scrollIntoView({ block: 'nearest' });
 }
+
+window.addEventListener('hashchange', () => last && render(last));
 
 function go() {
   const es = new EventSource('events');

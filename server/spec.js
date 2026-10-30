@@ -1,13 +1,13 @@
 // The manager's dashboard is a JSON tree, never HTML. Only these node types, these fields and
 // these actions get through; everything else is dropped. The page renders the result as text.
-const ACTIONS = new Set(['ask_agent', 'answer', 'open_console', 'refresh']);
+const ACTIONS = new Set(['ask_agent', 'answer', 'open_console', 'open_chat', 'refresh']);
 const str = (v, n = 400) => (typeof v === 'string' ? v.slice(0, n) : '');
 
 export function validateSpec(node, depth = 0) {
   if (!node || typeof node !== 'object' || depth > 5) return null;
   const kids = () => (Array.isArray(node.children) ? node.children.slice(0, 40).map((c) => validateSpec(c, depth + 1)).filter(Boolean) : []);
   const action = () => (ACTIONS.has(node.action) ? node.action : null);
-  const args = () => ({ terminal: /^[\w-]{1,32}$/.test(node.args?.terminal || '') ? node.args.terminal : '' });
+  const args = () => ({ terminal: /^[\w-]{1,32}$/.test(node.args?.terminal || '') ? node.args.terminal : '', id: /^[\w-]{1,12}$/.test(node.args?.id || '') ? node.args.id : '' });
   switch (node.type) {
     case 'stack': return { type: 'stack', children: kids() };
     case 'stats': return { type: 'stats', items: (Array.isArray(node.items) ? node.items : []).slice(0, 6).map((i) => ({ label: str(i?.label, 30), value: str(String(i?.value ?? ''), 30) })) };

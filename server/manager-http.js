@@ -7,10 +7,10 @@ import crypto from 'node:crypto';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
-export function createManagerServer({ manager, guide, dir, port, checkRequest, sendTo, readBody }) {
+export function createManagerServer({ manager, agents, killTerminal, guide, dir, port, checkRequest, sendTo, readBody }) {
   const clients = new Set();
   const ev = (res, e) => res.write(`data: ${JSON.stringify(e)}\n\n`);
-  const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs, busy: manager.state.busy, log: manager.state.log });
+  const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs, busy: manager.state.busy, log: manager.state.log, agents: agents.view() });
 
   const broadcast = () => { const s = view(); for (const r of clients) ev(r, { type: 'STATE_SNAPSHOT', snapshot: s }); };
 
@@ -40,6 +40,9 @@ export function createManagerServer({ manager, guide, dir, port, checkRequest, s
         manager.note(result.ok ? 'sent' : 'manager', result.ok ? `To ${name}: ${text}` : `Could not reach ${name}: ${result.error}`);
         manager.poll();
       }
+      else if (b.action === 'agent_send') result = await agents.send(String(b.args?.id || ''), b.text);
+      else if (b.action === 'agent_open') agents.open(String(b.args?.id || ''));
+      else if (b.action === 'kill') result = killTerminal(t) ? { ok: true } : { ok: false, error: 'not a terminal of this server' };
       else if (b.action === 'inform_agents') {
         // Only idle agents inside our terminals: typing into a busy or waiting one would mangle its prompt.
         const idle = manager.fleet().sessions.filter((s) => s.terminal && s.status === 'idle');
