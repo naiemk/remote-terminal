@@ -4,6 +4,7 @@
 // SendMessage tool, addressed to the session's socket).
 import { spawn } from 'node:child_process';
 import os from 'node:os';
+import fs from 'node:fs';
 import { snapshot, digest } from './fleet.js';
 import { askHaiku } from './haiku.js';
 
@@ -34,23 +35,51 @@ export function createAgents({ instances, sendTo, emit }) {
   };
   const find = (id) => snapshot(instances).sessions.find((s) => s.id === id);
 
-  function deliverPeer(s, text) {
+  // One attempt: a headless Haiku calls SendMessage once. It must answer DELIVERED or FAILED: <why>;
+  // anything else (a refusal, chatter, a timeout) counts as a failure so we can retry.
+  function peerOnce(socket, text) {
     return new Promise((resolve) => {
-      if (!sockOk(s.socket)) return resolve({ ok: false, error: 'this session has no message socket' });
       const msg = `From the Remote Terminal manager (the person is writing from their phone): ${text}`;
-      const p = spawn('claude', ['-p', '--model', 'haiku', '--no-session-persistence', '--allowedTools', 'SendMessage'],
+      // SendMessage may be a deferred tool, so ToolSearch has to be allowed to load it.
+      const p = spawn('claude', ['-p', '--model', 'haiku', '--no-session-persistence', '--allowedTools', 'SendMessage,ToolSearch'],
         { cwd: os.tmpdir(), stdio: ['pipe', 'pipe', 'pipe'] });
-      let out = '';
+      let out = '', done = false;
+      const end = (r) => { if (done) return; done = true; clearTimeout(kill); resolve(r); };
       p.stdout.on('data', (d) => (out += d));
       p.stderr.on('data', (d) => (out += d));
-      const kill = setTimeout(() => p.kill(), 60_000);
-      p.on('error', (e) => { clearTimeout(kill); resolve({ ok: false, error: e.message }); });
+      const kill = setTimeout(() => { p.kill('SIGKILL'); end({ ok: false, error: 'timed out sending the message' }); }, 60_000);
+      p.on('error', (e) => end({ ok: false, error: e.code === 'ENOENT' ? 'the claude command was not found' : e.message }));
       p.on('close', (code) => {
-        clearTimeout(kill);
-        resolve(code === 0 && /sent/i.test(out) ? { ok: true } : { ok: false, error: out.trim().slice(0, 200) || `exit ${code}` });
+        const t = out.trim();
+        if (code === 0 && /\bDELIVERED\b/.test(t) && !/\bFAILED\b/.test(t)) end({ ok: true });
+        else end({ ok: false, error: t.slice(0, 200) || `exit ${code}` });
       });
-      p.stdin.end(`Use the SendMessage tool exactly once with to=${JSON.stringify('uds:' + s.socket)} and message=${JSON.stringify(msg)}. Then reply with only the tool result.`);
+      p.stdin.on('error', () => {});
+      p.stdin.end(`Send one message to another Claude session.
+1. If the SendMessage tool is not available yet, load it with ToolSearch query "select:SendMessage".
+2. Call SendMessage exactly once with to=${JSON.stringify('uds:' + socket)} and message=${JSON.stringify(msg)}.
+3. If the tool result says the message was sent or delivered, reply with exactly: DELIVERED
+   Otherwise reply with exactly: FAILED: <the reason in a few words>
+Never call SendMessage a second time. Reply with nothing else.`);
     });
+  }
+
+  // Retried, because a model-driven send fails now and then for no lasting reason. A stale socket is
+  // not retried: the session is gone. The socket is re-read each time in case the session restarted.
+  async function deliverPeer(s, text) {
+    let err = 'unknown error';
+    for (let i = 0; i < 3; i++) {
+      const cur = i ? find(s.id) : s;
+      if (!cur) return { ok: false, error: 'this agent ended' };
+      if (!sockOk(cur.socket)) return { ok: false, error: 'this session has no message socket' };
+      if (!fs.existsSync(cur.socket)) return { ok: false, error: 'the session\'s message socket is gone; it may have exited' };
+      const r = await peerOnce(cur.socket, text);
+      if (r.ok) return r;
+      err = r.error;
+      if (/not found/.test(err)) break;
+      await new Promise((res) => setTimeout(res, 1500 * (i + 1)));
+    }
+    return { ok: false, error: `${err} (tried 3 times)` };
   }
 
   async function send(id, text) {
@@ -62,7 +91,9 @@ export function createAgents({ instances, sendTo, emit }) {
     const m = add(c, 'you', text, { state: 'sending' });
     c.pending = { since: Date.now(), sawBusy: s.status === 'busy', idle: 0, lastNote: 0, lastDigest: '', noted: new Set(), busy: false };
     emit();
-    const r = s.terminal ? sendTo(s.terminal, text) : await deliverPeer(s, text);
+    let r;
+    try { r = s.terminal ? sendTo(s.terminal, text) : await deliverPeer(s, text); }
+    catch (e) { r = { ok: false, error: e.message }; }
     if (!r.ok) {
       m.state = 'failed'; add(c, 'note', `Could not reach the agent: ${r.error}`); c.pending = null;
     } else m.state = 'delivered';
