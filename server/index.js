@@ -19,6 +19,7 @@ import { createFiles } from './files.js';
 import { foreground } from './procinfo.js';
 import { createConsoles } from './consoles.js';
 import { createManager } from './manager.js';
+import { createAgents } from './agents.js';
 import { createManagerServer } from './manager-http.js';
 import { createUpdater } from './updater.js';
 
@@ -275,8 +276,10 @@ const updater = createUpdater({
 });
 let managerHttp;
 const manager = createManager(instances, () => managerHttp?.broadcast());
+const agents = createAgents({ instances, sendTo, emit: () => managerHttp?.broadcast() });
+manager.summaries = () => Object.fromEntries(Object.entries(agents.view()).map(([id, c]) => [id, { summary: c.summary, chat: c.msgs.length > 0 }]));
 managerHttp = createManagerServer({
-  manager, guide: GUIDE, dir: path.join(PUBLIC_DIR, 'manager'), port: MANAGER_PORT, checkRequest, sendTo, readBody,
+  manager, agents, killTerminal: (id) => { const x = instances.get(id); if (x) killInstance(x); return !!x; }, guide: GUIDE, dir: path.join(PUBLIC_DIR, 'manager'), port: MANAGER_PORT, checkRequest, sendTo, readBody,
 });
 
 // ---------- http ----------

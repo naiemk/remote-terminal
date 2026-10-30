@@ -70,6 +70,30 @@ export function activity(sessionId) {
   return { lastText: text.slice(0, 400), lastTool: tool, lastPrompt: prompt.slice(0, 200), mtime: fs.statSync(file).mtimeMs / 1000 };
 }
 
+// A plain-text digest of what the agent said and did since `sinceMs` (or its last `max` entries),
+// small enough to hand to a model. `count` is how many entries it holds.
+export function digest(sessionId, sinceMs = 0, max = 30) {
+  const file = findTranscript(sessionId);
+  if (!file) return { text: '', count: 0 };
+  const out = [];
+  for (const l of tailLines(file, 400, 600_000)) {
+    let d; try { d = JSON.parse(l); } catch { continue; }
+    if (sinceMs && Date.parse(d.timestamp) < sinceMs) continue;
+    const c = d.message?.content;
+    if (d.type === 'assistant' && Array.isArray(c)) {
+      for (const b of c) {
+        if (b.type === 'text' && b.text.trim()) out.push(`agent: ${b.text.trim().slice(0, 500)}`);
+        else if (b.type === 'tool_use') out.push(`tool: ${b.name} ${JSON.stringify(b.input || {}).slice(0, 120)}`);
+      }
+    } else if (d.type === 'user' && !sinceMs) {
+      const t = typeof c === 'string' ? c : Array.isArray(c) ? c.find((b) => b.type === 'text')?.text : '';
+      if (t) out.push(`user: ${t.trim().slice(0, 300)}`);
+    }
+  }
+  const last = out.slice(-max);
+  return { text: last.join('\n'), count: out.length };
+}
+
 // `instances` is the server's Map of terminals; a session started in one of them gets its id
 // (`terminal`) so it can be talked to and opened. Others are visible but read-only.
 export function snapshot(instances) {
@@ -84,7 +108,7 @@ export function snapshot(instances) {
     sessions.push({
       id: String(s.sessionId).slice(0, 8), name: s.name || path.basename(s.cwd || '') || String(s.pid),
       status: s.status || 'unknown', cwd: tildify(s.cwd), started: s.startedAt / 1000, updated: (s.updatedAt || 0) / 1000,
-      terminal: owner?.id || null, ...activity(s.sessionId),
+      terminal: owner?.id || null, sid: String(s.sessionId), socket: s.messagingSocketPath || '', ...activity(s.sessionId),
     });
   }
   sessions.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));

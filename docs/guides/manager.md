@@ -5,7 +5,8 @@ A Haiku-backed Claude that watches the other Claude sessions on this computer an
 * **Menu → Manager** starts/stops it and opens the dashboard.
 * It reads `~/.claude/sessions` and transcript tails every 20 seconds without any model. Haiku runs only when something changed (at most every 3 minutes, `MANAGER_MIN_GAP_MS`) or when you message it.
 * The dashboard is reached at `/manager/` on the same address as the app (opening it starts the manager if needed). It also listens on `127.0.0.1:<port + 1>` (`MANAGER_PORT`), which you can publish on its own with `tailscale serve`; console links there need `?app=<app address>` once.
-* You can ask an agent to do something, answer one, or open its console, for sessions started in this server's terminals. Other sessions are read-only.
+* Every agent has a mini chat page (**Chat** on its card, `#/a/<id>`): a summary of where it stands, then you send it a message and watch progress notes that collapse into one final summary. Agents started in this server's terminals get the text typed in and have **Open terminal** (top right) and **Stop agent**. Other sessions are messaged through Claude's peer messaging; they can't be opened or stopped from here.
+* The layout is designed by the manager following `server/manager-skill.md` (it receives per-agent summaries); edit that file to change how the dashboard is composed.
 * The model's layout is a JSON tree limited to a fixed set of components; it is rendered as plain text, never HTML.
 
 ## Web consoles

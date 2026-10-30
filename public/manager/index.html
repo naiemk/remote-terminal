@@ -4,6 +4,7 @@
 <meta name="theme-color" content="#0b0f14"><title>Claude Manager</title>
 <link rel="stylesheet" href="manager.css"></head><body>
 <header><h1>Claude Manager</h1><span class="pill"><button id="more" aria-label="More">⋯</button><i class="dot off" id="dot"></i><span id="conn">connecting</span></span></header>
+<div id="board">
 <div id="bar"></div>
 <div id="more-menu" hidden><button data-m="inform_agents">Tell agents about web consoles</button></div>
 <p id="summary"></p><p id="err" class="err"></p>
@@ -11,4 +12,7 @@
 <main id="ui"></main>
 <div id="log"></div>
 <form id="msg"><input name="t" placeholder="Ask the manager…" autocomplete="off"><button>Send</button></form>
+</div>
+<section id="agent" hidden></section>
+<script src="agent.js"></script>
 <script src="render.js"></script></body></html>
