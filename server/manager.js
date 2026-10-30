@@ -31,22 +31,36 @@ export function createManager(instances, emit) {
   const ask = (prompt) => askHaiku(SYSTEM, prompt, MODEL);
 
   async function run(reason, userMessage) {
-    if (busy) return;
+    if (busy) { if (userMessage) queue.push(userMessage); return; }
     busy = true;
     state.busy = { reason, since: Date.now() };
     emit();
     const changes = pending; pending = []; lastRun = Date.now();
     try {
       const compact = last.sessions.map((s) => ({ id: s.id, name: s.name, status: s.status, cwd: s.cwd, terminal: s.terminal, lastText: s.lastText?.slice(0, 200) }));
-      const out = await ask(JSON.stringify({ reason, userMessage, changes, sessions: compact, agentSummaries: api.summaries?.() || {}, previousSummary: state.summary }));
-      const json = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1));
+      const prompt = JSON.stringify({ reason, userMessage, changes, sessions: compact, agentSummaries: api.summaries?.() || {}, previousSummary: state.summary });
+      let json, lastErr;
+      for (let attempt = 0; attempt < 2 && !json; attempt++) { // one retry: a bad reply or a flaky spawn is usually transient
+        try {
+          const out = await ask(prompt);
+          const a = out.indexOf('{'), b = out.lastIndexOf('}');
+          if (a < 0 || b < a) throw new Error('the manager replied without JSON');
+          json = JSON.parse(out.slice(a, b + 1));
+          if (!json || typeof json !== 'object') throw new Error('the manager reply was not an object');
+        } catch (e) { lastErr = e; }
+      }
+      if (!json) throw lastErr;
       state.summary = String(json.summary || '').slice(0, 600);
       state.ui = validateSpec(json.ui);
       state.usage.runs++; state.error = '';
       if (userMessage) note('manager', state.summary || 'Done.');
-    } catch (e) { state.error = e.message; if (userMessage) note('manager', `Sorry, that failed: ${e.message}`); }
+    } catch (e) {
+      state.error = e.message;
+      pending = changes.concat(pending); // not lost: the next run sees them
+      if (userMessage) note('manager', `Sorry, that failed: ${e.message}`);
+    }
     busy = false; state.busy = null;
-    emit();
+    try { emit(); } catch {}
     if (queue.length) run('user', queue.shift());
   }
 
