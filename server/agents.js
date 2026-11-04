@@ -5,7 +5,7 @@
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import fs from 'node:fs';
-import { snapshot, digest } from './fleet.js';
+import { snapshot, digest, projectContext } from './fleet.js';
 import { askHaiku } from './haiku.js';
 
 const TICK_MS = 3000;
@@ -16,6 +16,25 @@ const MAX_MSGS = 60;
 
 const SUMMARY_SYSTEM = `You report on a Claude Code agent for someone reading on a phone. Plain text, no markdown,
 at most 3 short sentences. Say what it did or is doing, and anything it needs from the person. Never invent anything.`;
+
+// Haiku words its result differently each time ("DELIVERED", "The message was delivered...", "sent"),
+// so judge by meaning: a clear failure word loses, otherwise a delivery word wins.
+const delivered = (t) => !/\b(FAILED|fail(ed|ure)?|unable|could not|couldn't|cannot|can't|error|denied|refused|not (been )?(sent|delivered))\b/i.test(t) && /\b(DELIVERED|sent|inbox|queued)\b/i.test(t);
+// Only an explicit failure is safe to retry; a timeout or odd reply may have sent it already, and a retry would duplicate.
+const failedBeforeSend = (t, code) => /\bFAILED\b/.test(t) || (code !== 0 && !t);
+
+const BRIEF_SYSTEM = `You are the project manager for one Claude Code agent, read on a phone. You get its working directory,
+its project files, git state and recent activity. Work out the bigger picture, not just the last message.
+Reply with ONE JSON object and nothing else:
+{"project": "what is being worked on, one sentence",
+ "kind": "feature" | "app" | "research" | "bugfix" | "ops" | "other",
+ "state": "where it stands, at most 3 short sentences; plain text",
+ "blocker": "what blocks it and how to resolve it, or empty string if nothing is blocked",
+ "next": [{"label": "3-6 words", "prompt": "the exact instruction to send this agent, one or two sentences, written to the agent"}, x3]}
+"next" has EXACTLY 3 distinct options (the person adds a 4th by typing). Cover, as fits: finishing or verifying the current
+piece; the natural follow-up (open the PR, add tests, update docs, the next roadmap item); and if blocked, a way to unblock it
+or another piece of work that is not blocked. When the work is done, propose fresh ideas drawn from the project (roadmap items,
+missing features, quality or cleanup work). Be concrete to THIS project; never invent facts, files or results.`;
 
 const sockOk = (p) => /^\/[\w@.+\/-]+\.sock$/.test(p || '');
 
@@ -47,12 +66,12 @@ export function createAgents({ instances, sendTo, emit }) {
       const end = (r) => { if (done) return; done = true; clearTimeout(kill); resolve(r); };
       p.stdout.on('data', (d) => (out += d));
       p.stderr.on('data', (d) => (out += d));
-      const kill = setTimeout(() => { p.kill('SIGKILL'); end({ ok: false, error: 'timed out sending the message' }); }, 60_000);
+      const kill = setTimeout(() => { p.kill('SIGKILL'); end({ ok: false, error: 'timed out; the message may have been delivered, check the agent', retry: false }); }, 60_000);
       p.on('error', (e) => end({ ok: false, error: e.code === 'ENOENT' ? 'the claude command was not found' : e.message }));
       p.on('close', (code) => {
         const t = out.trim();
-        if (code === 0 && /\bDELIVERED\b/.test(t) && !/\bFAILED\b/.test(t)) end({ ok: true });
-        else end({ ok: false, error: t.slice(0, 200) || `exit ${code}` });
+        if (code === 0 && delivered(t)) end({ ok: true });
+        else end({ ok: false, error: t.slice(0, 200) || `exit ${code}`, retry: failedBeforeSend(t, code) });
       });
       p.stdin.on('error', () => {});
       p.stdin.end(`Send one message to another Claude session.
@@ -76,10 +95,10 @@ Never call SendMessage a second time. Reply with nothing else.`);
       const r = await peerOnce(cur.socket, text);
       if (r.ok) return r;
       err = r.error;
-      if (/not found/.test(err)) break;
+      if (!r.retry) break;
       await new Promise((res) => setTimeout(res, 1500 * (i + 1)));
     }
-    return { ok: false, error: `${err} (tried 3 times)` };
+    return { ok: false, error: err };
   }
 
   async function send(id, text) {
@@ -105,15 +124,34 @@ Never call SendMessage a second time. Reply with nothing else.`);
     try { return (await askHaiku(SUMMARY_SYSTEM, prompt)).trim().slice(0, 700); } catch { return ''; }
   }
 
-  // The blob at the top of an agent's page; refreshed when the transcript has moved on.
+  // The brief at the top of an agent's page: where it stands, the project behind it, any blocker, and
+  // three suggested next moves; refreshed when the transcript has moved on.
+  async function brief(s) {
+    const d = digest(s.sid);
+    const prompt = `Agent "${s.name}" (${s.status}) in ${s.cwd}\n\nPROJECT\n${projectContext(s.cwd)}\n\nRECENT ACTIVITY\n${d.text}`;
+    let lastErr;
+    for (let i = 0; i < 2; i++) {
+      try {
+        const out = await askHaiku(BRIEF_SYSTEM, prompt);
+        const j = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1));
+        const next = (Array.isArray(j.next) ? j.next : []).map((n) => ({ label: String(n?.label || '').slice(0, 60), prompt: String(n?.prompt || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 600) }))
+          .filter((n) => n.label && n.prompt).slice(0, 3);
+        if (!next.length && !j.state) throw new Error('empty brief');
+        return { project: String(j.project || '').slice(0, 300), kind: String(j.kind || 'other').slice(0, 20), text: String(j.state || '').slice(0, 700), blocker: String(j.blocker || '').slice(0, 400), next };
+      } catch (e) { lastErr = e; }
+    }
+    return { text: '', error: lastErr?.message || 'failed' };
+  }
+
   async function refreshSummary(id) {
     const s = find(id), c = chat(id);
     if (!s || c.summary.busy || (c.summary.for && c.summary.for >= (s.mtime || 0)) || c.pending) return;
     const d = digest(s.sid);
     if (!d.count) { c.summary = { text: '', for: s.mtime || 0, busy: false }; return emit(); }
     c.summary.busy = true; emit();
-    const text = await summarize(c, id, `Agent "${s.name}" (${s.status}) in ${s.cwd}. Recent activity:\n${d.text}\n\nSummarize where things stand.`);
-    c.summary = { text: text || s.lastText || '', for: s.mtime || 0, busy: false };
+    const b = await brief(s);
+    // keep the old brief if this one failed; retry next time the page is opened
+    c.summary = b.error ? { ...c.summary, text: c.summary.text || s.lastText || '', for: 0, busy: false, error: b.error } : { ...b, for: s.mtime || 0, busy: false };
     emit();
   }
 
@@ -171,7 +209,7 @@ Never call SendMessage a second time. Reply with nothing else.`);
     open: refreshSummary,
     view() {
       const o = {};
-      for (const [id, c] of chats) o[id] = { msgs: c.msgs, pending: !!c.pending, summary: c.summary.text, summarizing: c.summary.busy };
+      for (const [id, c] of chats) o[id] = { msgs: c.msgs, pending: !!c.pending, summary: c.summary.text, summarizing: c.summary.busy, brief: { project: c.summary.project || '', kind: c.summary.kind || '', blocker: c.summary.blocker || '', next: c.summary.next || [] } };
       return o;
     },
   };
