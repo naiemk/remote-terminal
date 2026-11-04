@@ -35,3 +35,6 @@ button,.btn{font:inherit;color:var(--fg);background:var(--line);border:0;border-
 button.opt{text-align:left;padding:10px 14px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:inherit;font:inherit;font-weight:600}
 button.opt:disabled{opacity:.5}
 .blocker{margin-top:10px;padding:8px 10px;border-radius:10px;border:1px solid #c9822b;background:rgba(201,130,43,.12)}
+.atitle{font-weight:700;font-size:1.15em;margin-bottom:4px}.proj{opacity:.75;margin-bottom:8px}
+.sec{margin-top:10px}.hist{margin-top:14px}.hist>summary{cursor:pointer;opacity:.75;padding:6px 0}
+.blob{white-space:pre-wrap}

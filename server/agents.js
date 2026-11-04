@@ -23,18 +23,23 @@ const delivered = (t) => !/\b(FAILED|fail(ed|ure)?|unable|could not|couldn't|can
 // Only an explicit failure is safe to retry; a timeout or odd reply may have sent it already, and a retry would duplicate.
 const failedBeforeSend = (t, code) => /\bFAILED\b/.test(t) || (code !== 0 && !t);
 
-const BRIEF_SYSTEM = `You are the project manager for one Claude Code agent, read on a phone. You get its working directory,
-its project files, git state and recent activity. Work out the bigger picture, not just the last message.
-Reply with ONE JSON object and nothing else:
-{"project": "what is being worked on, one sentence",
+const BRIEF_SYSTEM = `You are the project manager for one Claude Code agent. The person runs several agents and forgets what each is
+doing, so you tell them, in full and concretely. You get its working directory, project files, git state and recent
+activity. You may also have read-only tools (Read, Glob, Grep) in the project: when the agent is idle or its next step is unclear,
+spend them to understand the project (README, docs, roadmap/TODO, source layout, open work) before answering.
+Reply with ONE JSON object and nothing else (plain text values, no markdown):
+{"title": "a short name for this piece of work, 3-8 words",
+ "project": "what the project is and the bigger goal, 1-2 sentences",
  "kind": "feature" | "app" | "research" | "bugfix" | "ops" | "other",
- "state": "where it stands, at most 3 short sentences; plain text",
+ "task": "the current job or task: what is being done right now and why, 2-5 sentences, enough that someone who forgot can pick it back up",
+ "chat": "summary of the latest conversation with the person: what they asked, what the agent answered or did, what was left open, 2-5 sentences",
+ "state": "where things stand: done, in progress, untested, what remains. 3-6 sentences",
  "blocker": "what blocks it and how to resolve it, or empty string if nothing is blocked",
- "next": [{"label": "3-6 words", "prompt": "the exact instruction to send this agent, one or two sentences, written to the agent"}, x3]}
-"next" has EXACTLY 3 distinct options (the person adds a 4th by typing). Cover, as fits: finishing or verifying the current
-piece; the natural follow-up (open the PR, add tests, update docs, the next roadmap item); and if blocked, a way to unblock it
-or another piece of work that is not blocked. When the work is done, propose fresh ideas drawn from the project (roadmap items,
-missing features, quality or cleanup work). Be concrete to THIS project; never invent facts, files or results.`;
+ "next": [{"label": "3-6 words", "prompt": "the exact instruction to send this agent, 1-3 sentences, written to the agent, specific enough to act on"}, x3]}
+"next" has EXACTLY 3 distinct options, the most valuable first (the person adds their own as a 4th). If the agent is idle or done:
+propose what to build or fix next in this project, drawn from its roadmap, gaps and what the work just done makes possible
+(next feature, tests, PR, docs, cleanup, a new capability). If it is mid-task: finish or verify it, then the natural follow-up.
+If blocked: a way to unblock, and work that is not blocked. Be concrete to THIS project; never invent facts, files or results.`;
 
 const sockOk = (p) => /^\/[\w@.+\/-]+\.sock$/.test(p || '');
 
@@ -132,12 +137,16 @@ Never call SendMessage a second time. Reply with nothing else.`);
     let lastErr;
     for (let i = 0; i < 2; i++) {
       try {
-        const out = await askHaiku(BRIEF_SYSTEM, prompt);
+        // Idle agents get a real look at the project; busy ones are summarised from their transcript alone.
+        const out = await (s.status === 'idle' && s.cwd
+          ? askHaiku(BRIEF_SYSTEM, prompt, 'sonnet', 240_000, { cwd: s.cwd.replace(/^~/, os.homedir()), tools: ['Read', 'Glob', 'Grep'] })
+          : askHaiku(BRIEF_SYSTEM, prompt));
         const j = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1));
         const next = (Array.isArray(j.next) ? j.next : []).map((n) => ({ label: String(n?.label || '').slice(0, 60), prompt: String(n?.prompt || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 600) }))
           .filter((n) => n.label && n.prompt).slice(0, 3);
         if (!next.length && !j.state) throw new Error('empty brief');
-        return { project: String(j.project || '').slice(0, 300), kind: String(j.kind || 'other').slice(0, 20), text: String(j.state || '').slice(0, 700), blocker: String(j.blocker || '').slice(0, 400), next };
+        const f = (v, n) => String(v || '').slice(0, n);
+        return { title: f(j.title, 100), project: f(j.project, 500), kind: f(j.kind || 'other', 20), task: f(j.task, 1200), chat: f(j.chat, 1200), text: f(j.state, 1500), blocker: String(j.blocker || '').slice(0, 400), next };
       } catch (e) { lastErr = e; }
     }
     return { text: '', error: lastErr?.message || 'failed' };
@@ -209,7 +218,7 @@ Never call SendMessage a second time. Reply with nothing else.`);
     open: refreshSummary,
     view() {
       const o = {};
-      for (const [id, c] of chats) o[id] = { msgs: c.msgs, pending: !!c.pending, summary: c.summary.text, summarizing: c.summary.busy, brief: { project: c.summary.project || '', kind: c.summary.kind || '', blocker: c.summary.blocker || '', next: c.summary.next || [] } };
+      for (const [id, c] of chats) o[id] = { msgs: c.msgs, pending: !!c.pending, summary: c.summary.text, summarizing: c.summary.busy, brief: { title: c.summary.title || '', task: c.summary.task || '', chat: c.summary.chat || '', project: c.summary.project || '', kind: c.summary.kind || '', blocker: c.summary.blocker || '', next: c.summary.next || [] } };
       return o;
     },
   };

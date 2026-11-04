@@ -1,10 +1,10 @@
-// One-shot headless Claude call: no tools, no session, no settings. Resolves with its stdout.
+// One-shot headless Claude call: no session, no settings, and no tools unless opts.tools (read-only ones, run in opts.cwd). Resolves with its stdout.
 import { spawn } from 'node:child_process';
 
-export function askHaiku(system, prompt, model = process.env.MANAGER_MODEL || 'haiku', timeoutMs = 120_000) {
+export function askHaiku(system, prompt, model = process.env.MANAGER_MODEL || 'haiku', timeoutMs = 120_000, opts = {}) {
   return new Promise((resolve, reject) => {
-    const p = spawn('claude', ['-p', '--model', model, '--system-prompt', system, '--tools', '', '--no-session-persistence',
-      '--disable-slash-commands', '--strict-mcp-config', '--setting-sources', ''], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const p = spawn('claude', ['-p', '--model', model, '--system-prompt', system, '--tools', (opts.tools || []).join(','), ...(opts.tools?.length ? ['--allowedTools', opts.tools.join(',')] : []), '--no-session-persistence',
+      '--disable-slash-commands', '--strict-mcp-config', '--setting-sources', ''], { cwd: opts.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '', err = '';
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (err += d));
