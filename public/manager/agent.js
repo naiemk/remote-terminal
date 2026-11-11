@@ -11,20 +11,22 @@ function renderAgent(s, id) {
     const head = el('div', 'top'); head.id = 'a-head';
     const acts = el('div', 'acts'); acts.id = 'a-acts';
     const blob = el('div', 'blob'); blob.id = 'a-blob';
+    const nx = el('div', 'next'); nx.id = 'a-next';
     const tl = el('div', 'tl'); tl.id = 'a-tl';
+    const hist = el('details', 'hist'); hist.id = 'a-hist'; hist.append(el('summary', '', 'History'), tl);
     const form = el('form', 'row sendrow'), input = el('textarea'), btn = el('button', 'send', 'Send');
     input.rows = 2; input.placeholder = 'Tell this agent what to do…'; input.id = 'a-in';
     form.append(input, btn);
     const go = () => { const t = input.value.trim(); if (!t || btn.disabled) return; input.value = ''; btn.disabled = true; act('agent_send', { id }, t); };
     form.onsubmit = (e) => { e.preventDefault(); go(); };
     input.onkeydown = (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); go(); } };
-    root.append(back, head, acts, blob, tl, form);
+    root.append(back, head, acts, blob, nx, form, hist);
     act('agent_open', { id });
   }
-  const head = $('a-head'), acts = $('a-acts'), blob = $('a-blob'), tl = $('a-tl'), btn = root.querySelector('.send');
+  const head = $('a-head'), acts = $('a-acts'), blob = $('a-blob'), nx = $('a-next'), tl = $('a-tl'), btn = root.querySelector('.send');
   if (!a) {
     head.replaceChildren(el('span', 'title', 'This agent has ended'));
-    acts.replaceChildren(); blob.replaceChildren(); btn.disabled = true;
+    acts.replaceChildren(); blob.replaceChildren(); nx.replaceChildren(); btn.disabled = true;
     return;
   }
   head.replaceChildren(el('span', 'title', a.name), el('span', 'badge ' + a.status.toLowerCase().replace(/\W/g, ''), a.status));
@@ -42,10 +44,31 @@ function renderAgent(s, id) {
     acts.append(el('div', 'hint', 'Started outside Remote Terminal. You can message it from here, but it can’t be opened or stopped here.'));
   }
 
-  blob.replaceChildren(el('div', 'lbl', 'Where it stands'));
-  if (chat.summarizing && !chat.summary) { const w = el('div', 'wait'); w.append(el('i', 'spin'), el('span', '', 'Reading its recent work…')); blob.append(w); }
-  else blob.append(el('div', '', chat.summary || a.lastText || 'Nothing to report yet.'));
+  const br = chat.brief || { next: [] };
+  const sec = (label, text) => { const d = el('div', 'sec'); d.append(el('div', 'lbl', label), el('div', '', text)); return d; };
+  blob.replaceChildren();
+  if (br.title) blob.append(el('div', 'atitle', br.title));
+  if (br.project) blob.append(el('div', 'proj', `${br.kind ? br.kind + ' · ' : ''}${br.project}`));
+  if (chat.summarizing && !chat.summary) { const w = el('div', 'wait'); w.append(el('i', 'spin'), el('span', '', 'Reading the project and its recent work…')); blob.append(w); }
+  else {
+    if (br.task) blob.append(sec('Current task', br.task));
+    if (br.chat) blob.append(sec('Latest chat', br.chat));
+    blob.append(sec('Where it stands', chat.summary || a.lastText || 'Nothing to report yet.'));
+  }
+  if (br.blocker) { const b = el('div', 'blocker'); b.append(el('div', 'lbl', 'Blocked'), el('div', '', br.blocker)); blob.append(b); }
 
+  // Three suggested next moves; the fourth is your own message in the box below.
+  const opts = br.next.map((n) => {
+    const b = el('button', 'opt', n.label); b.title = n.prompt; b.disabled = chat.pending;
+    b.onclick = () => { b.disabled = true; act('agent_send', { id }, n.prompt); };
+    const row = el('div', 'optrow'); row.append(b, el('small', '', n.prompt)); return row;
+  });
+  nx.replaceChildren(...(opts.length ? [el('div', 'lbl', 'Next moves'), ...opts, el('small', 'hint', 'Or write your own below.')] : []));
+
+  const hist = $('a-hist');
+  if (chat.pending && !hist.dataset.wasPending) hist.open = true; // show progress while it works, then leave it to you
+  hist.dataset.wasPending = chat.pending ? '1' : '';
+  hist.querySelector('summary').textContent = `History (${chat.msgs.length})`;
   const kids = [];
   chat.msgs.forEach((m, i) => {
     if (m.who === 'you') {
@@ -64,7 +87,7 @@ function renderAgent(s, id) {
   }
   tl.replaceChildren(...kids);
   const total = chat.msgs.length + (chat.pending ? 1 : 0);
-  if (total !== seen) { seen = total; (tl.lastChild || tl).scrollIntoView({ block: 'nearest' }); }
+  if (total !== seen) { seen = total; if (hist.open) (tl.lastChild || tl).scrollIntoView({ block: 'nearest' }); }
 
   btn.disabled = chat.pending;
   btn.replaceChildren(...(chat.pending ? [el('i', 'spin'), document.createTextNode(' Working')] : [document.createTextNode('Send')]));

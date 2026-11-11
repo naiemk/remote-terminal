@@ -130,3 +130,22 @@ export function diff(prev, cur) {
   for (const o of before.values()) changes.push({ id: o.id, name: o.name, change: 'ended' });
   return changes;
 }
+
+// What the project in `cwd` is, from its own files: git state plus the head of its README and any
+// roadmap/todo file. Cheap, no LLM; handed to the model so it can see the bigger picture.
+export function projectContext(cwd) {
+  const dir = (cwd || '').replace(/^~/, os.homedir());
+  if (!dir || !fs.existsSync(dir)) return '';
+  const git = (...a) => { try { return execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } };
+  const head = (names, n) => {
+    for (const f of names) { try { return `${f}:\n${fs.readFileSync(path.join(dir, f), 'utf8').slice(0, n)}`; } catch {} }
+    return '';
+  };
+  return [
+    `branch: ${git('rev-parse', '--abbrev-ref', 'HEAD')}`,
+    `uncommitted:\n${git('status', '--short').split('\n').slice(0, 12).join('\n')}`,
+    `recent commits:\n${git('log', '--oneline', '-8')}`,
+    head(['README.md', 'readme.md', 'README'], 900),
+    head(['ROADMAP.md', 'TODO.md', 'docs/roadmap.md', 'PLAN.md', 'STATUS.md', 'CLAUDE.md'], 900),
+  ].filter(Boolean).join('\n\n');
+}
