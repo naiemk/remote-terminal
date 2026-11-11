@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
-export function createManagerServer({ manager, agents, killTerminal, guide, dir, port, checkRequest, sendTo, readBody }) {
+export function createManagerServer({ manager, agents, killTerminal, guide, dir, port, checkRequest, sendTo, readBody, reload }) {
   const clients = new Set();
   const ev = (res, e) => res.write(`data: ${JSON.stringify(e)}\n\n`);
   const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs, busy: manager.state.busy, log: manager.state.log, agents: agents.view() });
@@ -40,6 +40,7 @@ export function createManagerServer({ manager, agents, killTerminal, guide, dir,
         manager.note(result.ok ? 'sent' : 'manager', result.ok ? `To ${name}: ${text}` : `Could not reach ${name}: ${result.error}`);
         manager.poll();
       }
+      else if (b.action === 'reload') { setTimeout(() => reload().catch((e) => console.error(`Manager reload failed: ${e.message}`)), 50); }
       else if (b.action === 'agent_send') result = await agents.send(String(b.args?.id || ''), b.text);
       else if (b.action === 'agent_open') agents.open(String(b.args?.id || ''));
       else if (b.action === 'kill') result = killTerminal(t) ? { ok: true } : { ok: false, error: 'not a terminal of this server' };
@@ -65,5 +66,9 @@ export function createManagerServer({ manager, agents, killTerminal, guide, dir,
   });
 
   server.on('error', (e) => console.error(`Manager dashboard: ${e.code === 'EADDRINUSE' ? `port ${port} is in use` : e.message}`));
-  return { broadcast, listen: () => server.listen(port, '127.0.0.1') };
+  return {
+    broadcast,
+    listen: () => new Promise((resolve) => { server.once('listening', resolve); server.once('error', resolve); server.listen(port, '127.0.0.1'); }),
+    close: () => new Promise((resolve) => { for (const r of clients) r.end(); clients.clear(); server.close(resolve); server.closeAllConnections?.(); }),
+  };
 }

@@ -109,5 +109,5 @@ $('more-menu').onclick = async (e) => {
   $('more-menu').hidden = true;
   const r = await fetch('api/act', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: m }) });
   const j = await r.json().catch(() => ({}));
-  $('summary').textContent = r.ok ? `Told ${j.told} idle agent(s).` : (j.error || 'failed');
+  $('summary').textContent = !r.ok ? (j.error || 'failed') : m === 'reload' ? 'Reloading the manager…' : `Told ${j.told} idle agent(s).`;
 };
