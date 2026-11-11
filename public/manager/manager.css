@@ -38,3 +38,4 @@ button.opt:disabled{opacity:.5}
 .atitle{font-weight:700;font-size:1.15em;margin-bottom:4px}.proj{opacity:.75;margin-bottom:8px}
 .sec{margin-top:10px}.hist{margin-top:14px}.hist>summary{cursor:pointer;opacity:.75;padding:6px 0}
 .blob{white-space:pre-wrap}
+button.opt.sel{background:var(--idle);color:#fff;border-color:var(--idle)}.nextbox{display:flex;flex-direction:column;gap:6px;margin:8px 0}#about{margin-bottom:8px}
