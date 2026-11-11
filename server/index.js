@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import dotenv from 'dotenv';
 import pty from 'node-pty';
@@ -276,7 +277,13 @@ const updater = createUpdater({
 // the "Reload manager" menu item, or POST /api/manager {"reload": true}. Chat history is not kept.
 const MGR_FILES = ['manager.js', 'agents.js', 'fleet.js', 'haiku.js', 'spec.js', 'manager-http.js', 'manager-skill.md'];
 const MGR_DIR = path.join(ROOT, 'server', '.manager');
-let mgr = null, mgrGen = 0, reloading = null;
+let mgr = null, mgrGen = 0, reloading = null, loadedAt = 0, loadedGen = 0;
+const about = () => {
+  let installed = '';
+  try { installed = fs.readFileSync(path.join(ROOT, '.version'), 'utf8').trim().slice(0, 7); } catch {}
+  if (!installed) try { installed = execFileSync('git', ['rev-parse', '--short=7', 'HEAD'], { cwd: ROOT, encoding: 'utf8', timeout: 2000 }).trim() + ' (git)'; } catch {}
+  return { version: JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version, installed, loadedAt, reloads: loadedGen - 1 };
+};
 
 // Plain stand-ins until the first load finishes.
 const manager = { isRunning: () => !!mgr?.manager.isRunning(), start: () => mgr?.manager.start(), stop: () => mgr?.manager.stop() };
@@ -288,7 +295,7 @@ async function loadManager() {
   const at = (f) => pathToFileURL(path.join(dir, f)).href;
   const [M, A, H] = await Promise.all([import(at('manager.js')), import(at('agents.js')), import(at('manager-http.js'))]);
   const wasRunning = !!mgr?.manager.isRunning();
-  if (mgr) { mgr.manager.stop(); await mgr.http.close(); }
+  if (mgr) { mgr.manager.stop(); mgr.agents.stop?.(); await mgr.http.close(); }
   let http;
   const emit = () => http?.broadcast();
   const mm = M.createManager(instances, emit);
@@ -296,9 +303,10 @@ async function loadManager() {
   mm.summaries = () => Object.fromEntries(Object.entries(ag.view()).map(([id, c]) => [id, { summary: c.summary, project: c.brief.project, kind: c.brief.kind, blocker: c.brief.blocker, chat: c.msgs.length > 0 }]));
   http = H.createManagerServer({
     manager: mm, agents: ag, killTerminal: (id) => { const x = instances.get(id); if (x) killInstance(x); return !!x; }, guide: GUIDE,
-    dir: path.join(PUBLIC_DIR, 'manager'), port: MANAGER_PORT, checkRequest, sendTo, readBody, reload: reloadManager,
+    dir: path.join(PUBLIC_DIR, 'manager'), port: MANAGER_PORT, checkRequest, sendTo, readBody, reload: reloadManager, about,
   });
-  mgr = { manager: mm, http };
+  mgr = { manager: mm, agents: ag, http };
+  loadedAt = Date.now(); loadedGen = mgrGen;
   await http.listen();
   if (wasRunning) mm.start();
   for (const old of fs.readdirSync(MGR_DIR)) if (old !== path.basename(dir)) fs.rmSync(path.join(MGR_DIR, old), { recursive: true, force: true });

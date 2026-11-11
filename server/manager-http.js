@@ -7,10 +7,10 @@ import crypto from 'node:crypto';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
-export function createManagerServer({ manager, agents, killTerminal, guide, dir, port, checkRequest, sendTo, readBody, reload }) {
+export function createManagerServer({ manager, agents, killTerminal, guide, dir, port, checkRequest, sendTo, readBody, reload, about }) {
   const clients = new Set();
   const ev = (res, e) => res.write(`data: ${JSON.stringify(e)}\n\n`);
-  const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs, busy: manager.state.busy, log: manager.state.log, agents: agents.view() });
+  const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs, busy: manager.state.busy, log: manager.state.log, agents: agents.view(), about: about ? about() : null });
 
   const broadcast = () => { const s = view(); for (const r of clients) ev(r, { type: 'STATE_SNAPSHOT', snapshot: s }); };
 

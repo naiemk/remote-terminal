@@ -24,6 +24,7 @@ function node(n, fleet) {
       return e;
     }
     case 'session': { const x = fleet.sessions.find((y) => y.id === n.id); return x ? node(sessionCard(x), fleet) : el('span'); }
+    case 'next': return nextBox(n.id);
     case 'text': return el('p', '', n.text);
     case 'list': { const e = el('ul'); for (const i of n.items) e.append(el('li', '', i)); return e; }
     case 'button': {
@@ -49,8 +50,41 @@ const consoleUrl = (id) => `${app || location.origin}/#${encodeURIComponent(id)}
 
 // A live card for one session; the manager refers to it by id so status and latest text never go stale.
 function sessionCard(s) {
-  return { type: 'card', title: s.name, subtitle: s.cwd, badge: s.status, text: s.lastText || '', children: [
-    { type: 'button', label: 'Chat', action: 'open_chat', args: { id: s.id } }] };
+  const a = (last?.agents || {})[s.id], b = a?.brief || {};
+  return { type: 'card', title: b.title || s.name, subtitle: b.project || s.cwd, badge: s.status, text: b.task || s.lastText || '', children: [
+    { type: 'next', id: s.id },
+    { type: 'button', label: 'Open chat', action: 'open_chat', args: { id: s.id } }] };
+}
+
+// Pick one of the suggested next moves and/or add your own words, then send: the whole dispatch for one agent.
+const draft = new Map();
+function nextBox(id) {
+  const a = (last?.agents || {})[id] || {}, b = a.brief || {}, d = draft.get(id) || (draft.set(id, { opt: -1, text: '' }), draft.get(id));
+  const e = el('div', 'nextbox');
+  if (b.blocker) e.append(el('div', 'blocker', 'Blocked: ' + b.blocker));
+  const opts = b.next || [];
+  if (!opts.length) e.append(el('div', 'hint', a.summarizing ? 'Reading the project to suggest next moves…' : 'No suggestions yet.'));
+  const send = el('button', 'send', 'Send');
+  const input = el('input'); input.dataset.key = 'ctx:' + id; input.value = d.text; input.autocomplete = 'off';
+  const sync = () => { input.placeholder = d.opt >= 0 ? 'Add context (optional)…' : 'Or type your own instruction…'; send.disabled = a.pending || (d.opt < 0 && !d.text.trim()); };
+  opts.forEach((o, i) => {
+    const bt = el('button', 'opt' + (d.opt === i ? ' sel' : ''), o.label); bt.title = o.prompt;
+    bt.onclick = () => { d.opt = d.opt === i ? -1 : i; for (const x of e.querySelectorAll('button.opt')) x.classList.remove('sel'); if (d.opt >= 0) bt.classList.add('sel'); sync(); };
+    e.append(bt);
+  });
+  const f = el('form', 'row'); f.append(input, send);
+  input.oninput = () => { d.text = input.value; sync(); };
+  f.onsubmit = (ev) => {
+    ev.preventDefault();
+    const t = [d.opt >= 0 ? opts[d.opt]?.prompt : '', d.text.trim() ? (d.opt >= 0 ? 'Additional context: ' : '') + d.text.trim() : ''].filter(Boolean).join('\n\n');
+    if (!t) return;
+    draft.set(id, { opt: -1, text: '' }); send.disabled = true; input.value = '';
+    act('agent_send', { id }, t);
+  };
+  sync();
+  e.append(f);
+  if (a.pending) e.append(el('div', 'hint', 'Sent. The agent is working on it…'));
+  return e;
 }
 
 // What to show before the manager has designed anything, or when it is off.
@@ -70,6 +104,8 @@ function render(s) {
   $('board').hidden = !!id; $('agent').hidden = !id;
   if (id) return renderAgent(s, id);
   $('summary').textContent = s.summary || (s.running ? 'Manager is starting…' : 'Manager is off. Showing a plain overview.');
+  const ab = s.about;
+  if (ab) $('about').textContent = `Claude Manager\nversion ${ab.version}${ab.installed ? ' (' + ab.installed + ')' : ''}\nmanager code loaded ${new Date(ab.loadedAt).toLocaleString()}${ab.reloads ? ' · reloaded ' + ab.reloads + '×' : ''}`;
   $('err').textContent = s.error ? 'Manager error: ' + s.error : '';
   const bar = $('bar'); bar.replaceChildren();
   const b = el('button', '', s.running ? 'Stop manager' : 'Start manager');
@@ -107,6 +143,7 @@ $('more').onclick = () => { $('more-menu').hidden = !$('more-menu').hidden; };
 $('more-menu').onclick = async (e) => {
   const m = e.target.dataset.m; if (!m) return;
   $('more-menu').hidden = true;
+  if (m === 'about') { $('about').hidden = !$('about').hidden; return; }
   const r = await fetch('api/act', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: m }) });
   const j = await r.json().catch(() => ({}));
   $('summary').textContent = !r.ok ? (j.error || 'failed') : m === 'reload' ? 'Reloading the manager…' : `Told ${j.told} idle agent(s).`;
