@@ -177,3 +177,33 @@ $('about').onclick = async () => {
   body.replaceChildren(el('p', '', `Running: v${a.version} (${short(a.installed)})`), el('p', '', `Latest: ${short(a.latest)}`), el('p', a.available ? 'err' : '', state));
 };
 $('about-close').onclick = () => $('about-dlg').close();
+
+// Spoken briefing: "Play summary" tells the whole story; "What's new" only what changed since the last listen.
+// Speech must be started from the tap itself (iOS), so we prime the synthesizer before waiting on the server.
+(() => {
+  const full = $('vfull'), news = $('vnew'), txt = $('vtext'), ss = window.speechSynthesis;
+  const get = () => { try { return Number(localStorage.getItem('voiceAt')) || 0; } catch { return 0; } };
+  const set = (t) => { try { localStorage.setItem('voiceAt', String(t)); } catch {} };
+  let playing = false;
+  const label = () => { full.textContent = playing ? '■ Stop' : '▶ Play summary'; };
+  const stop = () => { playing = false; ss?.cancel(); label(); };
+  const say = (text) => {
+    if (!ss) return;
+    ss.cancel(); playing = true; label();
+    // short chunks: some phones cut a long utterance off after about fifteen seconds
+    const parts = text.match(/[^.!?]+[.!?]*\s*/g) || [text];
+    parts.forEach((p, i) => { const u = new SpeechSynthesisUtterance(p.trim()); u.lang = 'en-US'; if (i === parts.length - 1) u.onend = u.onerror = () => { playing = false; label(); }; ss.speak(u); });
+  };
+  async function run(since, btn) {
+    if (playing) return stop();
+    if (ss) { ss.cancel(); ss.speak(new SpeechSynthesisUtterance('')); } // unlock audio inside the tap
+    const old = btn.textContent; full.disabled = news.disabled = true; btn.textContent = 'Writing…';
+    const at = Date.now();
+    const r = await fetch('api/act', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'voice', args: { since } }) }).then((x) => x.json()).catch(() => ({ error: 'unreachable' }));
+    full.disabled = news.disabled = false; btn.textContent = old; label();
+    if (!r.ok) { txt.hidden = false; txt.textContent = 'Could not write the summary: ' + (r.error || 'failed'); return; }
+    set(at); txt.hidden = false; txt.textContent = r.text; say(r.text);
+  }
+  full.onclick = () => run(0, full);
+  news.onclick = () => run(get(), news);
+})();

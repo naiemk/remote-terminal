@@ -4,11 +4,13 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { createVoice } from './voice.js';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
 export function createManagerServer({ manager, agents, killTerminal, guide, dir, port, checkRequest, sendTo, readBody, reload, about }) {
   const clients = new Set();
+  const voice = createVoice({ manager, agents });
   const ev = (res, e) => res.write(`data: ${JSON.stringify(e)}\n\n`);
   const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs, busy: manager.state.busy, log: manager.state.log, agents: agents.view() });
 
@@ -54,6 +56,7 @@ export function createManagerServer({ manager, agents, killTerminal, guide, dir,
         await Promise.all(jobs.map(([id, p]) => agents.send(id, p)));
         result = { ok: true, sent: jobs.length, skipped: manager.fleet().sessions.length - jobs.length };
       }
+      else if (b.action === 'voice') result = await voice.speak(b.args?.since);
       else if (b.action === 'agent_open') agents.open(String(b.args?.id || ''));
       else if (b.action === 'kill') result = killTerminal(t) ? { ok: true } : { ok: false, error: 'not a terminal of this server' };
       else if (b.action === 'inform_agents') {
@@ -81,6 +84,6 @@ export function createManagerServer({ manager, agents, killTerminal, guide, dir,
   return {
     broadcast,
     listen: () => new Promise((resolve) => { server.once('listening', resolve); server.once('error', resolve); server.listen(port, '127.0.0.1'); }),
-    close: () => new Promise((resolve) => { for (const r of clients) r.end(); clients.clear(); server.close(resolve); server.closeAllConnections?.(); }),
+    close: () => new Promise((resolve) => { voice.stop(); for (const r of clients) r.end(); clients.clear(); server.close(resolve); server.closeAllConnections?.(); }),
   };
 }
