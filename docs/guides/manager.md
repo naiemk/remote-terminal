@@ -20,3 +20,14 @@ one dashboard instead of creating another.
 The dashboard's **⋯** menu has **Tell agents about web consoles**, which types a one-line pointer to
 `~/.remote-terminal-server/AGENT_GUIDE.md` into each idle agent running in a Remote Terminal. The guide
 is regenerated from `server/agent-guide.md` at every server start.
+
+## Next moves on the board
+
+Every session card shows what the agent is doing, any blocker, and three suggested next moves. Tap one to
+send it to that agent, or type your own instruction in the card's box. Briefs are made in the background
+(about once a minute, and only for agents whose transcript changed), so you do not need to open each chat.
+
+- **Keep all going** (top bar) sends each idle agent its top suggested move.
+- **Tell all idle agents…** (bottom box) sends one message to every idle agent. Busy or waiting agents are
+  skipped, because typing into them would mangle their prompt.
+- **⋯ → About & version** shows the running version and the latest one, and whether you are up to date.

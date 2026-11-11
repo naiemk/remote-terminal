@@ -296,7 +296,7 @@ async function loadManager() {
   mm.summaries = () => Object.fromEntries(Object.entries(ag.view()).map(([id, c]) => [id, { summary: c.summary, project: c.brief.project, kind: c.brief.kind, blocker: c.brief.blocker, chat: c.msgs.length > 0 }]));
   http = H.createManagerServer({
     manager: mm, agents: ag, killTerminal: (id) => { const x = instances.get(id); if (x) killInstance(x); return !!x; }, guide: GUIDE,
-    dir: path.join(PUBLIC_DIR, 'manager'), port: MANAGER_PORT, checkRequest, sendTo, readBody, reload: reloadManager,
+    dir: path.join(PUBLIC_DIR, 'manager'), port: MANAGER_PORT, checkRequest, sendTo, readBody, reload: reloadManager, about: () => updater.status(),
   });
   mgr = { manager: mm, http };
   await http.listen();
