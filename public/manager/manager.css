@@ -42,3 +42,4 @@ button.opt:disabled{opacity:.5}
 dialog{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:14px;max-width:min(92vw,360px)}dialog::backdrop{background:rgba(0,0,0,.5)}
 .card button.opt{display:block;width:100%;margin-top:6px}
 button.opt.sel{background:var(--idle);color:#fff;border-color:var(--idle)}.nextbox{display:flex;flex-direction:column;gap:6px;margin:8px 0}#about{margin-bottom:8px}
+#voice{display:flex;gap:8px;align-items:stretch;margin:4px 0 10px}#voice button{font-weight:600;border-radius:12px}#vfull{flex:1;padding:16px 14px;font-size:17px;background:var(--idle);color:#fff}#vnew{padding:10px 12px;font-size:13px;background:var(--wait);color:#1a1300}#voice button:disabled{opacity:.6}#vtext{font-size:14px;color:var(--mut);margin:0 0 10px}
