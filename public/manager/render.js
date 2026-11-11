@@ -24,6 +24,7 @@ function node(n, fleet) {
       return e;
     }
     case 'session': { const x = fleet.sessions.find((y) => y.id === n.id); return x ? node(sessionCard(x), fleet) : el('span'); }
+    case 'next': return nextBox(n.id);
     case 'text': return el('p', '', n.text);
     case 'list': { const e = el('ul'); for (const i of n.items) e.append(el('li', '', i)); return e; }
     case 'button': {
@@ -63,11 +64,41 @@ const consoleUrl = (id) => `${app || location.origin}/#${encodeURIComponent(id)}
 // A card per session: what it is doing, its three suggested next moves (one tap sends it), and a box for
 // your own instruction. Sends go through the agent's chat, so progress shows on its page.
 function sessionCard(s) {
-  const b = last?.agents?.[s.id]?.brief || {};
-  const kids = [{ type: 'button', label: 'Chat', action: 'open_chat', args: { id: s.id } }];
-  for (const n of b.next || []) kids.push({ type: 'move', label: n.label, prompt: n.prompt, id: s.id });
-  kids.push({ type: 'tell', id: s.id });
-  return { type: 'card', title: b.title || s.name, subtitle: s.cwd, badge: s.status, text: b.blocker ? 'Needs you: ' + b.blocker : (last?.agents?.[s.id]?.summary || s.lastText || ''), children: kids };
+  const a = (last?.agents || {})[s.id], b = a?.brief || {};
+  return { type: 'card', title: b.title || s.name, subtitle: b.project || s.cwd, badge: s.status, text: b.task || s.lastText || '', children: [
+    { type: 'next', id: s.id },
+    { type: 'button', label: 'Open chat', action: 'open_chat', args: { id: s.id } }] };
+}
+
+// Pick one of the suggested next moves and/or add your own words, then send: the whole dispatch for one agent.
+const draft = new Map();
+function nextBox(id) {
+  const a = (last?.agents || {})[id] || {}, b = a.brief || {}, d = draft.get(id) || (draft.set(id, { opt: -1, text: '' }), draft.get(id));
+  const e = el('div', 'nextbox');
+  if (b.blocker) e.append(el('div', 'blocker', 'Blocked: ' + b.blocker));
+  const opts = b.next || [];
+  if (!opts.length) e.append(el('div', 'hint', a.summarizing ? 'Reading the project to suggest next moves…' : 'No suggestions yet.'));
+  const send = el('button', 'send', 'Send');
+  const input = el('input'); input.dataset.key = 'ctx:' + id; input.value = d.text; input.autocomplete = 'off';
+  const sync = () => { input.placeholder = d.opt >= 0 ? 'Add context (optional)…' : 'Or type your own instruction…'; send.disabled = a.pending || (d.opt < 0 && !d.text.trim()); };
+  opts.forEach((o, i) => {
+    const bt = el('button', 'opt' + (d.opt === i ? ' sel' : ''), o.label); bt.title = o.prompt;
+    bt.onclick = () => { d.opt = d.opt === i ? -1 : i; for (const x of e.querySelectorAll('button.opt')) x.classList.remove('sel'); if (d.opt >= 0) bt.classList.add('sel'); sync(); };
+    e.append(bt);
+  });
+  const f = el('form', 'row'); f.append(input, send);
+  input.oninput = () => { d.text = input.value; sync(); };
+  f.onsubmit = (ev) => {
+    ev.preventDefault();
+    const t = [d.opt >= 0 ? opts[d.opt]?.prompt : '', d.text.trim() ? (d.opt >= 0 ? 'Additional context: ' : '') + d.text.trim() : ''].filter(Boolean).join('\n\n');
+    if (!t) return;
+    draft.set(id, { opt: -1, text: '' }); send.disabled = true; input.value = '';
+    act('agent_send', { id }, t);
+  };
+  sync();
+  e.append(f);
+  if (a.pending) e.append(el('div', 'hint', 'Sent. The agent is working on it…'));
+  return e;
 }
 
 // What to show before the manager has designed anything, or when it is off.

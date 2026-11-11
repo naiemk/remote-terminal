@@ -288,7 +288,7 @@ async function loadManager() {
   const at = (f) => pathToFileURL(path.join(dir, f)).href;
   const [M, A, H] = await Promise.all([import(at('manager.js')), import(at('agents.js')), import(at('manager-http.js'))]);
   const wasRunning = !!mgr?.manager.isRunning();
-  if (mgr) { mgr.manager.stop(); await mgr.http.close(); }
+  if (mgr) { mgr.manager.stop(); mgr.agents.stop?.(); await mgr.http.close(); }
   let http;
   const emit = () => http?.broadcast();
   const mm = M.createManager(instances, emit);
@@ -298,7 +298,7 @@ async function loadManager() {
     manager: mm, agents: ag, killTerminal: (id) => { const x = instances.get(id); if (x) killInstance(x); return !!x; }, guide: GUIDE,
     dir: path.join(PUBLIC_DIR, 'manager'), port: MANAGER_PORT, checkRequest, sendTo, readBody, reload: reloadManager, about: () => updater.status(),
   });
-  mgr = { manager: mm, http };
+  mgr = { manager: mm, agents: ag, http };
   await http.listen();
   if (wasRunning) mm.start();
   for (const old of fs.readdirSync(MGR_DIR)) if (old !== path.basename(dir)) fs.rmSync(path.join(MGR_DIR, old), { recursive: true, force: true });

@@ -213,6 +213,24 @@ Never call SendMessage a second time. Reply with nothing else.`);
 
   const watch = () => { timer ||= setInterval(tick, TICK_MS); };
 
+  // Keep every session's brief fresh in the background, two at a time, so the board is ready when opened.
+  let scanning = false;
+  async function scan() {
+    if (scanning) return;
+    scanning = true;
+    try {
+      const todo = snapshot(instances).sessions.filter((s) => {
+        const c = chat(s.id).summary;
+        return !c.busy && !(c.for && c.for >= (s.mtime || 0)) && !(c.error && Date.now() - (c.failedAt || 0) < 300_000);
+      });
+      const lane = async () => { for (let s; (s = todo.shift());) { await refreshSummary(s.id); const c = chat(s.id).summary; if (c.error) c.failedAt = Date.now(); } };
+      await Promise.all([lane(), lane()]);
+    } catch {} finally { scanning = false; }
+  }
+  const scanTimer = setInterval(scan, 45_000);
+  scanTimer.unref?.();
+  setTimeout(scan, 2000).unref?.();
+
   return {
     async send(id, text) { const r = await send(id, text); if (chats.get(id)?.pending) watch(); return r; },
     open: refreshSummary,
@@ -220,6 +238,8 @@ Never call SendMessage a second time. Reply with nothing else.`);
     async openAll(ids) { for (const id of ids) await refreshSummary(id); },
     // The first suggested move of each given agent, for "keep them going".
     nextMoves(ids) { return ids.map((id) => [id, chats.get(id)?.summary?.next?.[0]?.prompt]).filter(([, p]) => p); },
+    scan,
+    stop() { clearInterval(scanTimer); if (timer) clearInterval(timer); },
     view() {
       const o = {};
       for (const [id, c] of chats) o[id] = { msgs: c.msgs, pending: !!c.pending, summary: c.summary.text, summarizing: c.summary.busy, brief: { title: c.summary.title || '', task: c.summary.task || '', chat: c.summary.chat || '', project: c.summary.project || '', kind: c.summary.kind || '', blocker: c.summary.blocker || '', next: c.summary.next || [] } };

@@ -12,12 +12,6 @@ export function createManagerServer({ manager, agents, killTerminal, guide, dir,
   const ev = (res, e) => res.write(`data: ${JSON.stringify(e)}\n\n`);
   const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs, busy: manager.state.busy, log: manager.state.log, agents: agents.view() });
 
-  // Every session gets a brief (state + three next moves) without anyone opening its page; a brief is
-  // only redone when the agent's transcript has moved on, so an unchanged fleet costs nothing.
-  const briefAll = () => agents.openAll(manager.fleet().sessions.map((x) => x.id)).catch(() => {});
-  const briefTimer = setInterval(briefAll, 60_000); briefTimer.unref?.();
-  setTimeout(briefAll, 2000).unref?.();
-
   const broadcast = () => { const s = view(); for (const r of clients) ev(r, { type: 'STATE_SNAPSHOT', snapshot: s }); };
 
   const server = http.createServer(async (req, res) => {
@@ -87,6 +81,6 @@ export function createManagerServer({ manager, agents, killTerminal, guide, dir,
   return {
     broadcast,
     listen: () => new Promise((resolve) => { server.once('listening', resolve); server.once('error', resolve); server.listen(port, '127.0.0.1'); }),
-    close: () => new Promise((resolve) => { clearInterval(briefTimer); for (const r of clients) r.end(); clients.clear(); server.close(resolve); server.closeAllConnections?.(); }),
+    close: () => new Promise((resolve) => { for (const r of clients) r.end(); clients.clear(); server.close(resolve); server.closeAllConnections?.(); }),
   };
 }
