@@ -663,19 +663,23 @@ function toast(msg) {
   toastTimer = setTimeout(() => { el.hidden = true; }, 1600);
 }
 
-async function copyText(text) {
-  if (!text) return;
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // Older browsers / no clipboard permission: copy through a temporary textarea.
-    const ta = Object.assign(document.createElement('textarea'), { value: text, readOnly: true });
-    ta.style.cssText = 'position:fixed;opacity:0;top:0';
-    document.body.append(ta); ta.select();
-    try { document.execCommand('copy'); } finally { ta.remove(); }
-  }
-  navigator.vibrate?.(8);
-  toast('Copied');
+// Copies synchronously first (a textarea and execCommand work on plain http and keep the tap's user
+// gesture, which an awaited navigator.clipboard call can lose); the async API is the fallback.
+function copyText(text) {
+  if (!text) return false;
+  const ta = Object.assign(document.createElement('textarea'), { value: text, readOnly: true });
+  ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0;font-size:16px'; // 16px stops iOS zooming
+  document.body.append(ta);
+  ta.focus({ preventScroll: true }); ta.select(); ta.setSelectionRange(0, text.length); // iOS needs the range
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch {}
+  ta.remove();
+  term?.focus();
+  const done = () => { navigator.vibrate?.(8); toast('Copied'); return true; };
+  if (ok) return done();
+  if (!navigator.clipboard) { toast('Copy failed: select it in the Copy view'); return false; }
+  navigator.clipboard.writeText(text).then(done, () => toast('Copy failed: select it in the Copy view'));
+  return true;
 }
 
 async function pasteClipboard() {

@@ -6,14 +6,15 @@
 <header><h1>Claude Manager</h1><span class="pill"><button id="more" aria-label="More">⋯</button><i class="dot off" id="dot"></i><span id="conn">connecting</span></span></header>
 <div id="board">
 <div id="bar"></div>
-<div id="more-menu" hidden><button data-m="inform_agents">Tell agents about web consoles</button><button data-m="reload">Reload manager (pick up new code)</button><button data-m="about">About / version</button></div>
-<div id="about" class="blob" hidden></div>
+<div id="more-menu" hidden><button data-m="inform_agents">Tell agents about web consoles</button><button id="about">About &amp; version</button><button data-m="reload">Reload manager (pick up new code)</button></div>
 <p id="summary"></p><p id="err" class="err"></p>
 <p id="busy" hidden><i class="spin"></i><span></span></p>
 <main id="ui"></main>
 <div id="log"></div>
+<form id="tellall"><input name="t" placeholder="Tell all idle agents…" autocomplete="off"><button>Send to all</button></form>
 <form id="msg"><input name="t" placeholder="Ask the manager…" autocomplete="off"><button>Send</button></form>
 </div>
+<dialog id="about-dlg"><h3>Claude Manager</h3><div id="about-body"></div><p><button id="about-close">Close</button></p></dialog>
 <section id="agent" hidden></section>
 <script src="agent.js"></script>
 <script src="render.js"></script></body></html>

@@ -110,3 +110,6 @@ Open the same terminal on your phone and your laptop at once, and both show the 
 ## Extras
 
 * Add `?webgl` to the address to use the GPU renderer, which can be faster for busy full-screen apps.
+
+**Copy not working?** Copy now runs inside the tap itself, so it works over plain `http://` (no HTTPS needed)
+and on iOS. If a browser still blocks it, use the Copy view and select the text there.

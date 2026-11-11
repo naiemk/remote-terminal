@@ -10,7 +10,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 export function createManagerServer({ manager, agents, killTerminal, guide, dir, port, checkRequest, sendTo, readBody, reload, about }) {
   const clients = new Set();
   const ev = (res, e) => res.write(`data: ${JSON.stringify(e)}\n\n`);
-  const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs, busy: manager.state.busy, log: manager.state.log, agents: agents.view(), about: about ? about() : null });
+  const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs, busy: manager.state.busy, log: manager.state.log, agents: agents.view() });
 
   const broadcast = () => { const s = view(); for (const r of clients) ev(r, { type: 'STATE_SNAPSHOT', snapshot: s }); };
 
@@ -29,6 +29,11 @@ export function createManagerServer({ manager, agents, killTerminal, guide, dir,
       req.on('close', () => { clients.delete(res); clearInterval(ping); });
       return;
     }
+    if (url.pathname === '/api/about') {
+      let a; try { a = await about(); } catch (e) { a = { error: e.message }; }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(a));
+    }
     if (post && url.pathname === '/api/act') {
       let b = {}; try { b = JSON.parse(await readBody(req)); } catch {}
       const t = String(b.args?.terminal || '');
@@ -42,6 +47,13 @@ export function createManagerServer({ manager, agents, killTerminal, guide, dir,
       }
       else if (b.action === 'reload') { setTimeout(() => reload().catch((e) => console.error(`Manager reload failed: ${e.message}`)), 50); }
       else if (b.action === 'agent_send') result = await agents.send(String(b.args?.id || ''), b.text);
+      else if (b.action === 'continue_all' || b.action === 'tell_all') {
+        // Only idle agents inside our terminals: typing into a busy or waiting one would mangle its prompt.
+        const idle = manager.fleet().sessions.filter((x) => x.terminal && x.status === 'idle').map((x) => x.id);
+        const jobs = b.action === 'tell_all' ? (text ? idle.map((id) => [id, text]) : []) : agents.nextMoves(idle);
+        await Promise.all(jobs.map(([id, p]) => agents.send(id, p)));
+        result = { ok: true, sent: jobs.length, skipped: manager.fleet().sessions.length - jobs.length };
+      }
       else if (b.action === 'agent_open') agents.open(String(b.args?.id || ''));
       else if (b.action === 'kill') result = killTerminal(t) ? { ok: true } : { ok: false, error: 'not a terminal of this server' };
       else if (b.action === 'inform_agents') {

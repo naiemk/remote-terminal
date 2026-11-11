@@ -32,6 +32,18 @@ function node(n, fleet) {
       b.onclick = () => (n.action === 'open_chat' ? (location.hash = '#/a/' + n.args.id) : n.action === 'open_console' ? window.open(consoleUrl(n.args.terminal), '_blank') : act(n.action, n.args));
       return b;
     }
+    case 'move': {
+      const b = el('button', 'opt', n.label); b.title = n.prompt;
+      b.onclick = () => { b.disabled = true; act('agent_send', { id: n.id }, n.prompt).finally(() => (b.disabled = false)); };
+      return b;
+    }
+    case 'tell': {
+      const f = el('form', 'row'), i = el('input'), b = el('button', '', 'Send');
+      i.placeholder = 'Your own instruction…'; i.dataset.key = 'tell:' + n.id;
+      f.append(i, b);
+      f.onsubmit = (ev) => { ev.preventDefault(); if (i.value.trim()) { act('agent_send', { id: n.id }, i.value); i.value = ''; } };
+      return f;
+    }
     case 'input': {
       const f = el('form', 'row'), i = el('input'), b = el('button', '', 'Send');
       i.placeholder = n.placeholder || '';
@@ -49,6 +61,8 @@ const app = (() => { const q = new URLSearchParams(location.search).get('app'); 
 const consoleUrl = (id) => `${app || location.origin}/#${encodeURIComponent(id)}`;
 
 // A live card for one session; the manager refers to it by id so status and latest text never go stale.
+// A card per session: what it is doing, its three suggested next moves (one tap sends it), and a box for
+// your own instruction. Sends go through the agent's chat, so progress shows on its page.
 function sessionCard(s) {
   const a = (last?.agents || {})[s.id], b = a?.brief || {};
   return { type: 'card', title: b.title || s.name, subtitle: b.project || s.cwd, badge: s.status, text: b.task || s.lastText || '', children: [
@@ -104,14 +118,14 @@ function render(s) {
   $('board').hidden = !!id; $('agent').hidden = !id;
   if (id) return renderAgent(s, id);
   $('summary').textContent = s.summary || (s.running ? 'Manager is starting…' : 'Manager is off. Showing a plain overview.');
-  const ab = s.about;
-  if (ab) $('about').textContent = `Claude Manager\nversion ${ab.version}${ab.installed ? ' (' + ab.installed + ')' : ''}\nmanager code loaded ${new Date(ab.loadedAt).toLocaleString()}${ab.reloads ? ' · reloaded ' + ab.reloads + '×' : ''}`;
   $('err').textContent = s.error ? 'Manager error: ' + s.error : '';
   const bar = $('bar'); bar.replaceChildren();
   const b = el('button', '', s.running ? 'Stop manager' : 'Start manager');
   b.onclick = () => act(s.running ? 'stop' : 'start');
   const r = el('button', '', 'Refresh'); r.onclick = () => act('refresh');
-  bar.append(b, r);
+  const k = el('button', '', 'Keep all going'); k.title = "Send each idle agent its top suggested move";
+  k.onclick = async () => { k.disabled = true; await act('continue_all'); k.disabled = false; };
+  bar.append(b, r, k);
   // Redraw in place, keeping whatever is being typed in the cards' boxes.
   const typed = new Map(), f = document.activeElement;
   for (const i of document.querySelectorAll('#ui input')) if (i.value) typed.set(i.dataset.key, i.value);
@@ -143,8 +157,23 @@ $('more').onclick = () => { $('more-menu').hidden = !$('more-menu').hidden; };
 $('more-menu').onclick = async (e) => {
   const m = e.target.dataset.m; if (!m) return;
   $('more-menu').hidden = true;
-  if (m === 'about') { $('about').hidden = !$('about').hidden; return; }
   const r = await fetch('api/act', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: m }) });
   const j = await r.json().catch(() => ({}));
   $('summary').textContent = !r.ok ? (j.error || 'failed') : m === 'reload' ? 'Reloading the manager…' : `Told ${j.told} idle agent(s).`;
 };
+
+$('tellall').onsubmit = async (e) => {
+  e.preventDefault(); const i = e.target.t, t = i.value.trim(); if (!t) return;
+  i.value = ''; await act('tell_all', {}, t);
+};
+
+$('about').onclick = async () => {
+  $('more-menu').hidden = true;
+  const d = $('about-dlg'), body = $('about-body'); body.textContent = 'Checking…'; d.showModal();
+  const a = await fetch('api/about').then((r) => r.json()).catch(() => ({ error: 'unreachable' }));
+  if (a.error && !a.version) { body.textContent = 'Could not check: ' + a.error; return; }
+  const short = (c) => (c ? String(c).slice(0, 7) : 'unknown');
+  const state = !a.latest ? 'Latest version unknown (offline?).' : a.available ? 'A newer version is available.' : 'You are up to date.';
+  body.replaceChildren(el('p', '', `Running: v${a.version} (${short(a.installed)})`), el('p', '', `Latest: ${short(a.latest)}`), el('p', a.available ? 'err' : '', state));
+};
+$('about-close').onclick = () => $('about-dlg').close();

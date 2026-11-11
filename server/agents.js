@@ -234,6 +234,10 @@ Never call SendMessage a second time. Reply with nothing else.`);
   return {
     async send(id, text) { const r = await send(id, text); if (chats.get(id)?.pending) watch(); return r; },
     open: refreshSummary,
+    // Briefs for every session, one at a time (each is a model call); skips ones already current.
+    async openAll(ids) { for (const id of ids) await refreshSummary(id); },
+    // The first suggested move of each given agent, for "keep them going".
+    nextMoves(ids) { return ids.map((id) => [id, chats.get(id)?.summary?.next?.[0]?.prompt]).filter(([, p]) => p); },
     scan,
     stop() { clearInterval(scanTimer); if (timer) clearInterval(timer); },
     view() {
