@@ -79,6 +79,7 @@ function nextBox(id) {
   if (b.blocker) e.append(el('div', 'blocker', 'Blocked: ' + b.blocker));
   const opts = b.next || [];
   if (!opts.length) e.append(el('div', 'hint', a.summarizing ? 'Reading the project to suggest next moves…' : 'No suggestions yet.'));
+  if (a.screen) e.append(el('pre', 'screen', a.screen), el('div', 'hint', 'Waiting on you. Type the option number (or your answer) and Send; check the terminal to confirm.'));
   const send = el('button', 'send', 'Send');
   const input = el('input'); input.dataset.key = 'ctx:' + id; input.value = d.text; input.autocomplete = 'off';
   // Handlers read the live DOM, never captured nodes: a patched card keeps its old elements and takes the new handlers.

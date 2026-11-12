@@ -43,7 +43,7 @@ If blocked: a way to unblock, and work that is not blocked. Be concrete to THIS 
 
 const sockOk = (p) => /^\/[\w@.+\/-]+\.sock$/.test(p || '');
 
-export function createAgents({ instances, sendTo, emit }) {
+export function createAgents({ instances, sendTo, emit, screen = () => '' }) {
   const chats = new Map(); // session id -> { msgs, pending, summary }
   let timer = null, seq = 0;
 
@@ -116,13 +116,13 @@ Never call SendMessage a second time. Reply with nothing else.`);
     const c = chat(id);
     if (c.pending) return { ok: false, error: 'wait for the agent to finish the last message' };
     const m = add(c, 'you', text);
-    // An agent stopped at a question or an approval does not read new messages until that is answered, and
-    // typing into its picker could choose the wrong option. Say so instead of pretending it was sent.
-    if (s.status === 'waiting') {
+    // An agent in one of our terminals that is stopped at a question gets the text typed into its picker
+    // (type the option's number). One outside our terminals reads no new messages until answered.
+    if (s.status === 'waiting' && !s.terminal) {
       stage(c, m, 'failed');
-      add(c, 'note', 'The agent is waiting at a question or approval in its terminal. Answer it there (Open terminal); a message sent now would not reach it.');
+      add(c, 'note', 'The agent is waiting at a question or approval in a terminal this server does not own, so a message cannot reach it. Answer it there.');
       emit();
-      return { ok: false, error: 'the agent is waiting for an answer in its terminal; open it and answer there' };
+      return { ok: false, error: 'the agent is waiting for an answer in its own terminal' };
     }
     stage(c, m, 'received');
     c.pending = { since: Date.now(), sawBusy: s.status === 'busy', idle: 0, lastNote: 0, lastDigest: '', noted: new Set(), busy: false, msg: m };
@@ -261,7 +261,7 @@ Never call SendMessage a second time. Reply with nothing else.`);
     stop() { clearInterval(scanTimer); if (timer) clearInterval(timer); },
     view() {
       const o = {};
-      for (const [id, c] of chats) o[id] = { msgs: c.msgs, pending: !!c.pending, summary: c.summary.text, summarizing: c.summary.busy, brief: { title: c.summary.title || '', task: c.summary.task || '', chat: c.summary.chat || '', project: c.summary.project || '', kind: c.summary.kind || '', blocker: c.summary.blocker || '', next: c.summary.next || [] } };
+      for (const [id, c] of chats) o[id] = { screen: (find(id)?.status === 'waiting' && find(id)?.terminal) ? screen(find(id).terminal) : '', msgs: c.msgs, pending: !!c.pending, summary: c.summary.text, summarizing: c.summary.busy, brief: { title: c.summary.title || '', task: c.summary.task || '', chat: c.summary.chat || '', project: c.summary.project || '', kind: c.summary.kind || '', blocker: c.summary.blocker || '', next: c.summary.next || [] } };
       return o;
     },
   };
