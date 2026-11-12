@@ -198,7 +198,22 @@ $('about-close').onclick = () => $('about-dlg').close();
   if (ss) { fill(); ss.onvoiceschanged = fill; }
   sel.onchange = () => { try { localStorage.setItem('voiceName', sel.value); } catch {} if (ss) { ss.cancel(); const u = new SpeechSynthesisUtterance('Hello, this is how I sound.'); u.voice = chosen(); ss.speak(u); } };
   const label = () => { full.textContent = playing ? '■ Stop' : '▶ Play summary'; };
-  const stop = () => { playing = false; ss?.cancel(); label(); };
+  const au = $('vaudio'), SILENT = 'data:audio/wav;base64,UklGRiQAAAAXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+  const stop = () => { playing = false; ss?.cancel(); au.pause(); au.currentTime = 0; label(); };
+  au.onended = au.onerror = () => { if (au.src && !au.src.startsWith('data:')) { playing = false; label(); } };
+  // Recorded audio keeps playing with the screen locked or another app open (speech synthesis does not).
+  const play = async (url) => {
+    au.src = url; playing = true; label();
+    try {
+      await au.play();
+      if (navigator.mediaSession) {
+        navigator.mediaSession.metadata = new MediaMetadata({ title: 'Claude Manager summary', artist: 'Remote Terminal' });
+        navigator.mediaSession.setActionHandler('play', () => { au.play(); playing = true; label(); });
+        navigator.mediaSession.setActionHandler('pause', () => { au.pause(); playing = false; label(); });
+      }
+      return true;
+    } catch { playing = false; label(); return false; }
+  };
   const say = (text) => {
     if (!ss) return;
     ss.cancel(); playing = true; label();
@@ -209,12 +224,14 @@ $('about-close').onclick = () => $('about-dlg').close();
   async function run(since, btn) {
     if (playing) return stop();
     if (ss) { ss.cancel(); ss.speak(new SpeechSynthesisUtterance('')); } // unlock audio inside the tap
+    au.src = SILENT; au.play().catch(() => {});
     const old = btn.textContent; full.disabled = news.disabled = true; btn.textContent = 'Writing…';
     const at = Date.now();
     const r = await fetch('api/act', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'voice', args: { since } }) }).then((x) => x.json()).catch(() => ({ error: 'unreachable' }));
     full.disabled = news.disabled = false; btn.textContent = old; label();
     if (!r.ok) { txt.hidden = false; txt.textContent = 'Could not write the summary: ' + (r.error || 'failed'); return; }
-    set(at); txt.hidden = false; txt.textContent = r.text; say(r.text);
+    set(at); txt.hidden = false; txt.textContent = r.text;
+    if (!(r.audio && await play(r.audio))) say(r.text);
   }
   full.onclick = () => run(0, full);
   news.onclick = () => run(get(), news);

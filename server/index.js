@@ -274,7 +274,7 @@ const updater = createUpdater({
 // The manager runs inside this process, but its code is loaded from a fresh copy each time, so a
 // new version can be picked up without restarting the server (and without closing your terminals):
 // the "Reload manager" menu item, or POST /api/manager {"reload": true}. Chat history is not kept.
-const MGR_FILES = ['manager.js', 'agents.js', 'fleet.js', 'haiku.js', 'spec.js', 'voice.js', 'manager-http.js', 'manager-skill.md'];
+const MGR_FILES = ['manager.js', 'agents.js', 'fleet.js', 'haiku.js', 'spec.js', 'voice.js', 'tts.js', 'manager-http.js', 'manager-skill.md'];
 const MGR_DIR = path.join(ROOT, 'server', '.manager');
 let mgr = null, mgrGen = 0, reloading = null;
 

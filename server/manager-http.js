@@ -5,12 +5,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createVoice } from './voice.js';
+import { createTts } from './tts.js';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
 export function createManagerServer({ manager, agents, killTerminal, guide, dir, port, checkRequest, sendTo, readBody, reload, about }) {
   const clients = new Set();
   const voice = createVoice({ manager, agents });
+  const tts = createTts();
   const ev = (res, e) => res.write(`data: ${JSON.stringify(e)}\n\n`);
   const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs, busy: manager.state.busy, log: manager.state.log, agents: agents.view() });
 
@@ -36,6 +38,7 @@ export function createManagerServer({ manager, agents, killTerminal, guide, dir,
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify(a));
     }
+    if (req.method === 'GET' && url.pathname.startsWith('/api/tts/')) return tts.serve(req, res, path.basename(url.pathname));
     if (post && url.pathname === '/api/act') {
       let b = {}; try { b = JSON.parse(await readBody(req)); } catch {}
       const t = String(b.args?.terminal || '');
@@ -56,7 +59,7 @@ export function createManagerServer({ manager, agents, killTerminal, guide, dir,
         await Promise.all(jobs.map(([id, p]) => agents.send(id, p)));
         result = { ok: true, sent: jobs.length, skipped: manager.fleet().sessions.length - jobs.length };
       }
-      else if (b.action === 'voice') result = await voice.speak(b.args?.since);
+      else if (b.action === 'voice') { result = await voice.speak(b.args?.since); if (result.ok) result.audio = await tts.clip(result.text); }
       else if (b.action === 'agent_open') agents.open(String(b.args?.id || ''));
       else if (b.action === 'kill') result = killTerminal(t) ? { ok: true } : { ok: false, error: 'not a terminal of this server' };
       else if (b.action === 'inform_agents') {
