@@ -147,10 +147,20 @@ function fallback(fleet) {
   ] };
 }
 
+// Which voice the briefing will use: the server's neural one (plays with the phone locked) or the browser's.
+function vstatus(v) {
+  const t = $('vstat'), x = v?.state;
+  t.textContent = x === 'ready' ? 'Voice: neural (plays with the screen locked)' : x === 'installing' ? 'Voice: installing the neural voice (~110 MB)…'
+    : x === 'failed' ? `Voice: install failed (${v.error}). Using the browser voice.` : x === 'unsupported' ? 'Voice: no neural voice for this machine. Using the browser voice.'
+    : 'Voice: browser voice (the server has not started the neural install; restart it or retry)';
+  if (x === 'failed' || x === 'unknown') { const b = el('button', '', 'Retry install'); b.onclick = () => act('voice_install'); t.append(' ', b); }
+}
+
 function route() { const m = location.hash.match(/^#\/a\/([\w-]+)$/); return m ? m[1] : null; }
 
 function render(s) {
   last = s;
+  vstatus(s.voice);
   const id = route();
   $('board').hidden = !!id; $('agent').hidden = !id;
   if (id) return renderAgent(s, id);
