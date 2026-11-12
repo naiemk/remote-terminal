@@ -151,7 +151,7 @@ function fallback(fleet) {
 function vstatus(v) {
   const t = $('vstat'), x = v?.state;
   t.textContent = x === 'ready' ? 'Voice: neural (plays with the screen locked)' : x === 'installing' ? 'Voice: installing the neural voice (~110 MB)…'
-    : x === 'failed' ? `Voice: install failed (${v.error}). Using the browser voice.` : x === 'unsupported' ? 'Voice: no neural voice for this machine. Using the browser voice.'
+    : x === 'failed' ? `Voice: install failed (${v.error}). Using the browser voice.` : x === 'broken' ? `Voice: neural voice is installed but failed to run (${v.error}). Using the browser voice.` : x === 'unsupported' ? 'Voice: no neural voice for this machine. Using the browser voice.'
     : 'Voice: browser voice (the server has not started the neural install; restart it or retry)';
   if (x === 'failed' || x === 'unknown') { const b = el('button', '', 'Retry install'); b.onclick = () => act('voice_install'); t.append(' ', b); }
 }

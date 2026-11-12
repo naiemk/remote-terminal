@@ -58,7 +58,7 @@ export function ensure(log = () => {}) {
   return installing;
 }
 
-export const status = () => (fs.existsSync(BIN) && model() ? { state: 'ready', error: '' } : { ...st });
+export const status = () => (fs.existsSync(BIN) && model() ? (st.synthError ? { state: 'broken', error: st.synthError } : { state: 'ready', error: '' }) : { ...st });
 
 export function createTts() {
   ensure((m) => console.log(m));
@@ -68,13 +68,15 @@ export function createTts() {
   function synth(text) {
     return new Promise((resolve, reject) => {
       const out = path.join(os.tmpdir(), `rt-tts-${crypto.randomUUID()}.wav`);
-      const p = spawn(BIN, ['-m', model(), '-f', out, '-q'], { cwd: path.dirname(BIN), stdio: ['pipe', 'ignore', 'ignore'] });
+      const p = spawn(BIN, ['-m', model(), '-f', out, '-q'], { cwd: path.dirname(BIN), stdio: ['pipe', 'ignore', 'pipe'] });
+      let err = '';
+      p.stderr.on('data', (d) => { err = (err + d).slice(-300); });
       const timer = setTimeout(() => p.kill('SIGKILL'), 120_000);
-      p.on('error', (e) => { clearTimeout(timer); reject(e); });
+      p.on('error', (e) => { clearTimeout(timer); reject(e); }); // e.g. EACCES / bad CPU type
       p.on('close', (code) => {
         clearTimeout(timer);
-        try { const b = fs.readFileSync(out); fs.rmSync(out, { force: true }); code === 0 && b.length ? resolve(b) : reject(new Error('voice synthesis failed')); }
-        catch { reject(new Error('voice synthesis failed')); }
+        try { const b = fs.readFileSync(out); fs.rmSync(out, { force: true }); code === 0 && b.length ? resolve(b) : reject(new Error(err.trim().split('\n').pop() || `piper exited with code ${code}`)); }
+        catch { reject(new Error(err.trim().split('\n').pop() || 'voice synthesis failed')); }
       });
       p.stdin.end(text.replace(/\s+/g, ' '));
     });
@@ -87,8 +89,9 @@ export function createTts() {
       const id = crypto.randomUUID();
       clips.set(id, await synth(text));
       while (clips.size > 6) clips.delete(clips.keys().next().value);
+      st.synthError = '';
       return `api/tts/${id}.wav`;
-    } catch { return null; }
+    } catch (e) { st.synthError = String(e.message).slice(0, 200); return null; }
   }
 
   // GET /api/tts/<id>.wav, with Range support (iOS will not play audio without it).
