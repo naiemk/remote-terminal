@@ -68,7 +68,7 @@ export function createTts() {
   function synth(text) {
     return new Promise((resolve, reject) => {
       const out = path.join(os.tmpdir(), `rt-tts-${crypto.randomUUID()}.wav`);
-      const p = spawn(BIN, ['-m', model(), '-f', out, '-q'], { cwd: path.dirname(BIN), stdio: ['pipe', 'ignore', 'pipe'] });
+      const p = spawn(BIN, ['-m', model(), '-f', out, '-q'], { cwd: path.dirname(BIN), env: { ...process.env, DYLD_LIBRARY_PATH: path.dirname(BIN) + (process.env.DYLD_LIBRARY_PATH ? ':' + process.env.DYLD_LIBRARY_PATH : ''), LD_LIBRARY_PATH: path.dirname(BIN) + (process.env.LD_LIBRARY_PATH ? ':' + process.env.LD_LIBRARY_PATH : '') }, stdio: ['pipe', 'ignore', 'pipe'] });
       let err = '';
       p.stderr.on('data', (d) => { err = (err + d).slice(-300); });
       const timer = setTimeout(() => p.kill('SIGKILL'), 120_000);
