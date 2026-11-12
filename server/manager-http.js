@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createVoice } from './voice.js';
-import { createTts } from './tts.js';
+import { createTts, ensure as ensureVoice, status as voiceStatus } from './tts.js';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
@@ -14,7 +14,7 @@ export function createManagerServer({ manager, agents, killTerminal, guide, dir,
   const voice = createVoice({ manager, agents });
   const tts = createTts();
   const ev = (res, e) => res.write(`data: ${JSON.stringify(e)}\n\n`);
-  const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs, busy: manager.state.busy, log: manager.state.log, agents: agents.view() });
+  const view = () => ({ running: manager.isRunning(), fleet: manager.fleet(), summary: manager.state.summary, ui: manager.state.ui, error: manager.state.error, runs: manager.state.usage.runs, busy: manager.state.busy, log: manager.state.log, agents: agents.view(), voice: voiceStatus() });
 
   const broadcast = () => { const s = view(); for (const r of clients) ev(r, { type: 'STATE_SNAPSHOT', snapshot: s }); };
 
@@ -59,6 +59,7 @@ export function createManagerServer({ manager, agents, killTerminal, guide, dir,
         await Promise.all(jobs.map(([id, p]) => agents.send(id, p)));
         result = { ok: true, sent: jobs.length, skipped: manager.fleet().sessions.length - jobs.length };
       }
+      else if (b.action === 'voice_install') { ensureVoice((m) => console.log(m)); }
       else if (b.action === 'voice') { result = await voice.speak(b.args?.since); if (result.ok) result.audio = await tts.clip(result.text); }
       else if (b.action === 'agent_open') agents.open(String(b.args?.id || ''));
       else if (b.action === 'kill') result = killTerminal(t) ? { ok: true } : { ok: false, error: 'not a terminal of this server' };

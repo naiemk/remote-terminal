@@ -16,6 +16,7 @@ const VOICE = 'en_US-lessac-medium';
 const VOICE_URL = `https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/${VOICE}`;
 const ARCHIVES = { 'linux-x64': 'piper_linux_x86_64.tar.gz', 'linux-arm64': 'piper_linux_aarch64.tar.gz', 'darwin-x64': 'piper_macos_x64.tar.gz', 'darwin-arm64': 'piper_macos_aarch64.tar.gz' };
 let installing = null;
+const st = { state: 'unknown', error: '' }; // installing | failed | unsupported | ready (see status())
 
 async function get(url, file) {
   const r = await fetch(url, { redirect: 'follow' });
@@ -29,7 +30,8 @@ async function get(url, file) {
 export function ensure(log = () => {}) {
   if (fs.existsSync(BIN) && model()) return Promise.resolve(true);
   const archive = ARCHIVES[`${process.platform}-${process.arch}`];
-  if (!archive) { log(`Piper voice: no build for ${process.platform}-${process.arch}`); return Promise.resolve(false); }
+  if (!archive) { st.state = 'unsupported'; log(`Piper voice: no build for ${process.platform}-${process.arch}`); return Promise.resolve(false); }
+  st.state = 'installing'; st.error = '';
   installing ||= (async () => {
     const tmp = `${DIR}.part-${process.pid}-${Date.now()}`;
     try {
@@ -44,16 +46,19 @@ export function ensure(log = () => {}) {
       fs.rmSync(DIR, { recursive: true, force: true });
       fs.mkdirSync(path.dirname(DIR), { recursive: true });
       fs.renameSync(tmp, DIR);
-      log('Piper voice installed.');
+      log('Piper voice installed.'); st.state = 'ready';
       return true;
     } catch (e) {
       fs.rmSync(tmp, { recursive: true, force: true });
+      st.state = 'failed'; st.error = String(e.message).slice(0, 200);
       log(`Piper voice install failed (will retry next start): ${e.message}`);
       return false;
     } finally { installing = null; }
   })();
   return installing;
 }
+
+export const status = () => (fs.existsSync(BIN) && model() ? (st.synthError ? { state: 'broken', error: st.synthError } : { state: 'ready', error: '' }) : { ...st });
 
 export function createTts() {
   ensure((m) => console.log(m));
@@ -63,13 +68,15 @@ export function createTts() {
   function synth(text) {
     return new Promise((resolve, reject) => {
       const out = path.join(os.tmpdir(), `rt-tts-${crypto.randomUUID()}.wav`);
-      const p = spawn(BIN, ['-m', model(), '-f', out, '-q'], { cwd: path.dirname(BIN), stdio: ['pipe', 'ignore', 'ignore'] });
+      const p = spawn(BIN, ['-m', model(), '-f', out, '-q'], { cwd: path.dirname(BIN), stdio: ['pipe', 'ignore', 'pipe'] });
+      let err = '';
+      p.stderr.on('data', (d) => { err = (err + d).slice(-300); });
       const timer = setTimeout(() => p.kill('SIGKILL'), 120_000);
-      p.on('error', (e) => { clearTimeout(timer); reject(e); });
+      p.on('error', (e) => { clearTimeout(timer); reject(e); }); // e.g. EACCES / bad CPU type
       p.on('close', (code) => {
         clearTimeout(timer);
-        try { const b = fs.readFileSync(out); fs.rmSync(out, { force: true }); code === 0 && b.length ? resolve(b) : reject(new Error('voice synthesis failed')); }
-        catch { reject(new Error('voice synthesis failed')); }
+        try { const b = fs.readFileSync(out); fs.rmSync(out, { force: true }); code === 0 && b.length ? resolve(b) : reject(new Error(err.trim().split('\n').pop() || `piper exited with code ${code}`)); }
+        catch { reject(new Error(err.trim().split('\n').pop() || 'voice synthesis failed')); }
       });
       p.stdin.end(text.replace(/\s+/g, ' '));
     });
@@ -82,8 +89,9 @@ export function createTts() {
       const id = crypto.randomUUID();
       clips.set(id, await synth(text));
       while (clips.size > 6) clips.delete(clips.keys().next().value);
+      st.synthError = '';
       return `api/tts/${id}.wav`;
-    } catch { return null; }
+    } catch (e) { st.synthError = String(e.message).slice(0, 200); return null; }
   }
 
   // GET /api/tts/<id>.wav, with Range support (iOS will not play audio without it).
