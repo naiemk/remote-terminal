@@ -1,5 +1,5 @@
 // Turns the spoken summary into audio with Piper (free, offline, neural), when it is installed
-// (scripts/install-piper.sh). Audio files play in an <audio> tag, which keeps going with the phone locked;
+// (installed automatically in the background by ensure(), or by scripts/install-piper.sh). Audio files play in an <audio> tag, which keeps going with the phone locked;
 // the browser's own speech synthesis stops as soon as the screen locks.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -11,7 +11,52 @@ const DIR = process.env.PIPER_DIR || path.join(os.homedir(), '.local', 'share', 
 const BIN = path.join(DIR, 'piper', 'piper');
 const model = () => { try { return fs.readdirSync(DIR).filter((f) => f.endsWith('.onnx')).sort().map((f) => path.join(DIR, f))[0] || ''; } catch { return ''; } };
 
+const REL = 'https://github.com/rhasspy/piper/releases/download/2023.11.14-2/';
+const VOICE = 'en_US-lessac-medium';
+const VOICE_URL = `https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/${VOICE}`;
+const ARCHIVES = { 'linux-x64': 'piper_linux_x86_64.tar.gz', 'linux-arm64': 'piper_linux_aarch64.tar.gz', 'darwin-x64': 'piper_macos_x64.tar.gz', 'darwin-arm64': 'piper_macos_aarch64.tar.gz' };
+let installing = null;
+
+async function get(url, file) {
+  const r = await fetch(url, { redirect: 'follow' });
+  if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+  fs.writeFileSync(file, Buffer.from(await r.arrayBuffer()));
+}
+
+// Downloads Piper and a voice (~110 MB) into DIR if they are missing. Best effort, once per process, in the
+// background: until it finishes (or if it fails, e.g. offline or an unsupported platform) the page speaks with
+// the browser's own voice. Built in a temp folder and moved into place, so a half download never counts.
+export function ensure(log = () => {}) {
+  if (fs.existsSync(BIN) && model()) return Promise.resolve(true);
+  const archive = ARCHIVES[`${process.platform}-${process.arch}`];
+  if (!archive) { log(`Piper voice: no build for ${process.platform}-${process.arch}`); return Promise.resolve(false); }
+  installing ||= (async () => {
+    const tmp = `${DIR}.part-${process.pid}-${Date.now()}`;
+    try {
+      log('Installing the Piper voice in the background (~110 MB)…');
+      fs.rmSync(tmp, { recursive: true, force: true }); fs.mkdirSync(tmp, { recursive: true });
+      await get(REL + archive, path.join(tmp, 'piper.tgz'));
+      await new Promise((res, rej) => { const t = spawn('tar', ['xzf', 'piper.tgz'], { cwd: tmp, stdio: 'ignore' }); t.on('error', rej); t.on('close', (c) => (c === 0 ? res() : rej(new Error('could not unpack Piper')))); });
+      fs.rmSync(path.join(tmp, 'piper.tgz'));
+      await get(`${VOICE_URL}.onnx`, path.join(tmp, `${VOICE}.onnx`));
+      await get(`${VOICE_URL}.onnx.json`, path.join(tmp, `${VOICE}.onnx.json`));
+      fs.chmodSync(path.join(tmp, 'piper', 'piper'), 0o755);
+      fs.rmSync(DIR, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(DIR), { recursive: true });
+      fs.renameSync(tmp, DIR);
+      log('Piper voice installed.');
+      return true;
+    } catch (e) {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      log(`Piper voice install failed (will retry next start): ${e.message}`);
+      return false;
+    } finally { installing = null; }
+  })();
+  return installing;
+}
+
 export function createTts() {
+  ensure((m) => console.log(m));
   const clips = new Map(); // id -> Buffer (wav), newest last
   const available = () => fs.existsSync(BIN) && !!model();
 
