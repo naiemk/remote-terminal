@@ -106,23 +106,39 @@ Never call SendMessage a second time. Reply with nothing else.`);
     return { ok: false, error: err };
   }
 
-  async function send(id, text) {
+  // Accepts a message at once (stage "received") and delivers it in the background, so the page can show
+  // each stage: received -> forwarding -> delivered -> working (or waiting on you) -> done / failed.
+  const stage = (c, m, state) => { m.state = state; (m.at ||= {})[state] = Date.now(); };
+  function send(id, text) {
     text = String(text || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 2000);
     const s = find(id);
     if (!s || !text) return { ok: false, error: s ? 'empty message' : 'no such agent' };
     const c = chat(id);
     if (c.pending) return { ok: false, error: 'wait for the agent to finish the last message' };
-    const m = add(c, 'you', text, { state: 'sending' });
-    c.pending = { since: Date.now(), sawBusy: s.status === 'busy', idle: 0, lastNote: 0, lastDigest: '', noted: new Set(), busy: false };
+    const m = add(c, 'you', text);
+    // An agent stopped at a question or an approval does not read new messages until that is answered, and
+    // typing into its picker could choose the wrong option. Say so instead of pretending it was sent.
+    if (s.status === 'waiting') {
+      stage(c, m, 'failed');
+      add(c, 'note', 'The agent is waiting at a question or approval in its terminal. Answer it there (Open terminal); a message sent now would not reach it.');
+      emit();
+      return { ok: false, error: 'the agent is waiting for an answer in its terminal; open it and answer there' };
+    }
+    stage(c, m, 'received');
+    c.pending = { since: Date.now(), sawBusy: s.status === 'busy', idle: 0, lastNote: 0, lastDigest: '', noted: new Set(), busy: false, msg: m };
     emit();
-    let r;
-    try { r = s.terminal ? sendTo(s.terminal, text) : await deliverPeer(s, text); }
-    catch (e) { r = { ok: false, error: e.message }; }
-    if (!r.ok) {
-      m.state = 'failed'; add(c, 'note', `Could not reach the agent: ${r.error}`); c.pending = null;
-    } else m.state = 'delivered';
-    emit();
-    return r;
+    (async () => {
+      stage(c, m, 'forwarding'); emit();
+      let r;
+      try { r = s.terminal ? sendTo(s.terminal, text) : await deliverPeer(s, text); }
+      catch (e) { r = { ok: false, error: e.message }; }
+      if (!r.ok) {
+        stage(c, m, 'failed'); add(c, 'note', `Could not reach the agent: ${r.error}`); c.pending = null;
+      } else stage(c, m, 'delivered');
+      emit();
+      if (c.pending) watch();
+    })();
+    return { ok: true, accepted: true };
   }
 
   async function summarize(c, id, prompt) {
@@ -185,6 +201,7 @@ Never call SendMessage a second time. Reply with nothing else.`);
     }
     c.msgs = c.msgs.filter((m) => m.who !== 'progress'); // the little progress notes give way to one summary
     add(c, why ? 'note' : 'summary', text);
+    if (p.msg && p.msg.state !== 'failed') stage(c, p.msg, why ? 'ended' : 'done');
     c.pending = null;
     c.summary.for = 0; // the top blob is stale now
     emit();
@@ -197,10 +214,12 @@ Never call SendMessage a second time. Reply with nothing else.`);
     const sessions = snapshot(instances).sessions;
     for (const [id, c] of waiting) {
       const p = c.pending, s = sessions.find((x) => x.id === id), age = Date.now() - p.since;
+      if (p.msg && (p.msg.state === 'received' || p.msg.state === 'forwarding')) continue; // still being handed over
       if (!s) { finish(c, id, null, 'This agent ended.'); continue; }
-      if (s.status === 'busy') { p.sawBusy = true; p.idle = 0; }
+      const mm = p.msg, live = mm && (mm.state === 'delivered' || mm.state === 'working' || mm.state === 'waiting');
+      if (s.status === 'busy') { p.sawBusy = true; p.idle = 0; if (live && mm.state !== 'working') { stage(c, mm, 'working'); } }
       else if (s.status === 'waiting') {
-        p.sawBusy = true; p.idle = 0;
+        p.sawBusy = true; p.idle = 0; if (live && mm.state !== 'waiting') stage(c, mm, 'waiting');
         if (!p.noted.has('waiting')) { p.noted.add('waiting'); add(c, 'progress', 'The agent is waiting for an answer or an approval.'); emit(); }
       } else if (p.sawBusy || (s.mtime || 0) * 1000 > p.since) p.idle++;
       if (p.idle >= 2) { finish(c, id, s); continue; }
@@ -232,7 +251,7 @@ Never call SendMessage a second time. Reply with nothing else.`);
   setTimeout(scan, 2000).unref?.();
 
   return {
-    async send(id, text) { const r = await send(id, text); if (chats.get(id)?.pending) watch(); return r; },
+    send,
     open: refreshSummary,
     // Briefs for every session, one at a time (each is a model call); skips ones already current.
     async openAll(ids) { for (const id of ids) await refreshSummary(id); },
