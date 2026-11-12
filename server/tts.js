@@ -15,6 +15,7 @@ const REL = 'https://github.com/rhasspy/piper/releases/download/2023.11.14-2/';
 const VOICE = 'en_US-lessac-medium';
 const VOICE_URL = `https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/${VOICE}`;
 const ARCHIVES = { 'linux-x64': 'piper_linux_x86_64.tar.gz', 'linux-arm64': 'piper_linux_aarch64.tar.gz', 'darwin-x64': 'piper_macos_x64.tar.gz', 'darwin-arm64': 'piper_macos_aarch64.tar.gz' };
+const MAC = process.platform === 'darwin'; // Piper's macOS download ships without its libraries, so macOS uses the built-in `say`
 let installing = null;
 const st = { state: 'unknown', error: '' }; // installing | failed | unsupported | ready (see status())
 
@@ -28,6 +29,7 @@ async function get(url, file) {
 // background: until it finishes (or if it fails, e.g. offline or an unsupported platform) the page speaks with
 // the browser's own voice. Built in a temp folder and moved into place, so a half download never counts.
 export function ensure(log = () => {}) {
+  if (MAC) { st.state = 'ready'; return Promise.resolve(true); }
   if (fs.existsSync(BIN) && model()) return Promise.resolve(true);
   const archive = ARCHIVES[`${process.platform}-${process.arch}`];
   if (!archive) { st.state = 'unsupported'; log(`Piper voice: no build for ${process.platform}-${process.arch}`); return Promise.resolve(false); }
@@ -58,17 +60,19 @@ export function ensure(log = () => {}) {
   return installing;
 }
 
-export const status = () => (fs.existsSync(BIN) && model() ? (st.synthError ? { state: 'broken', error: st.synthError } : { state: 'ready', error: '' }) : { ...st });
+export const status = () => (MAC ? (st.synthError ? { state: 'broken', error: st.synthError } : { state: 'ready', error: '' }) : fs.existsSync(BIN) && model() ? (st.synthError ? { state: 'broken', error: st.synthError } : { state: 'ready', error: '' }) : { ...st });
 
 export function createTts() {
   ensure((m) => console.log(m));
   const clips = new Map(); // id -> Buffer (wav), newest last
-  const available = () => fs.existsSync(BIN) && !!model();
+  const available = () => MAC || (fs.existsSync(BIN) && !!model());
 
   function synth(text) {
     return new Promise((resolve, reject) => {
       const out = path.join(os.tmpdir(), `rt-tts-${crypto.randomUUID()}.wav`);
-      const p = spawn(BIN, ['-m', model(), '-f', out, '-q'], { cwd: path.dirname(BIN), stdio: ['pipe', 'ignore', 'pipe'] });
+      const p = MAC
+        ? spawn('say', [...(process.env.SAY_VOICE ? ['-v', process.env.SAY_VOICE] : []), '-o', out, '--data-format=LEI16@22050', '-f', '-'], { stdio: ['pipe', 'ignore', 'pipe'] })
+        : spawn(BIN, ['-m', model(), '-f', out, '-q'], { cwd: path.dirname(BIN), env: { ...process.env, DYLD_LIBRARY_PATH: path.dirname(BIN) + (process.env.DYLD_LIBRARY_PATH ? ':' + process.env.DYLD_LIBRARY_PATH : ''), LD_LIBRARY_PATH: path.dirname(BIN) + (process.env.LD_LIBRARY_PATH ? ':' + process.env.LD_LIBRARY_PATH : '') }, stdio: ['pipe', 'ignore', 'pipe'] });
       let err = '';
       p.stderr.on('data', (d) => { err = (err + d).slice(-300); });
       const timer = setTimeout(() => p.kill('SIGKILL'), 120_000);
