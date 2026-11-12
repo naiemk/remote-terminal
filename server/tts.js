@@ -1,5 +1,5 @@
 // Turns the spoken summary into audio with Piper (free, offline, neural), when it is installed
-// (installed automatically in the background by ensure(), or by scripts/install-piper.sh). Audio files play in an <audio> tag, which keeps going with the phone locked;
+// (installed automatically in the background by ensure()). Audio files play in an <audio> tag, which keeps going with the phone locked;
 // the browser's own speech synthesis stops as soon as the screen locks.
 import fs from 'node:fs';
 import os from 'node:os';
