@@ -228,10 +228,12 @@ $('about-close').onclick = () => $('about-dlg').close();
   const score = (v) => (/^en/i.test(v.lang) ? 0 : -100) - (BAD.test(v.name) ? 50 : 0) + (/premium/i.test(v.name) ? 40 : 0) + (/enhanced/i.test(v.name) ? 30 : 0)
     + (/natural|neural|online/i.test(v.name) ? 35 : 0) + (/siri/i.test(v.name) ? 25 : 0) + (/google/i.test(v.name) ? 15 : 0) + (/^(ava|zoe|evan|nathan|allison|samantha|serena|daniel|moira|karen|aaron|nicky)\b/i.test(v.name) ? 10 : 0)
     + (/^en[-_]US/i.test(v.lang) ? 3 : 0) + (v.localService ? 1 : 0);
-  const voices = () => (ss?.getVoices() || []).filter((v) => /^en/i.test(v.lang)).sort((a, b) => score(b) - score(a));
+  // Novelty voices (Bells, Organ, ...) are never useful for a briefing, so they are hidden; other languages stay listed,
+  // after the English ones, because the phone may expose a voice you installed under a different language.
+  const voices = () => (ss?.getVoices() || []).filter((v) => !BAD.test(v.name) || /premium|enhanced/i.test(v.name)).sort((a, b) => score(b) - score(a));
   const chosen = () => { let n = ''; try { n = localStorage.getItem('voiceName') || ''; } catch {} const all = voices(); return all.find((v) => v.name === n) || all[0]; };
   const sel = $('vpick');
-  const fill = () => { const all = voices(), cur = chosen(); sel.replaceChildren(...all.map((v) => { const o = el('option', '', v.name + (/premium|enhanced|natural|neural|siri/i.test(v.name) ? ' ★' : '')); o.value = v.name; o.selected = v === cur; return o; })); };
+  const fill = () => { const all = voices(), cur = chosen(); sel.replaceChildren(...all.map((v) => { const o = el('option', '', v.name + (/^en/i.test(v.lang) ? '' : ` (${v.lang})`) + (/premium|enhanced|natural|neural|siri/i.test(v.name) ? ' ★' : '')); o.value = v.name; o.selected = v === cur; return o; })); };
   if (ss) { fill(); ss.onvoiceschanged = fill; }
   sel.onchange = () => { try { localStorage.setItem('voiceName', sel.value); } catch {} if (ss) { ss.cancel(); const u = new SpeechSynthesisUtterance('Hello, this is how I sound.'); u.voice = chosen(); ss.speak(u); } };
   const label = () => { full.textContent = playing ? '■ Stop' : '▶ Play summary'; };
