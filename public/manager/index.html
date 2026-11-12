@@ -6,6 +6,7 @@
 <header><h1>Claude Manager</h1><span class="pill"><button id="more" aria-label="More">⋯</button><i class="dot off" id="dot"></i><span id="conn">connecting</span></span></header>
 <div id="board">
 <div id="voice"><button id="vnew" title="Only what changed since you last listened">What's new</button><button id="vfull">▶ Play summary</button></div>
+<audio id="vaudio" preload="auto" playsinline></audio>
 <p id="vtext" class="blob" hidden></p>
 <div id="bar"></div>
 <div id="more-menu" hidden><button data-m="inform_agents">Tell agents about web consoles</button><button id="about">About &amp; version</button><label class="vlbl">Voice <select id="vpick"></select></label><button data-m="reload">Reload manager (pick up new code)</button></div>
