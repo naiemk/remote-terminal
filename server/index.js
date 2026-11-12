@@ -253,6 +253,15 @@ function sendTo(id, text) {
   return { ok: true };
 }
 
+// The last lines on a terminal's screen as plain text: what a waiting agent is asking.
+function screen(id) {
+  const x = instances.get(id);
+  if (!x) return '';
+  const raw = Buffer.concat(x.scrollback).subarray(-6000).toString('utf8');
+  const t = raw.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '').replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '\n').replace(/\x1b[()][A-Z0-9]|\x1b[=>78]/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+  return t.split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-14).join('\n').slice(-1200);
+}
+
 function proxy(req, res, port, target) {
   const up = http.request({ host: BIND, port, method: req.method, path: target, headers: req.headers }, (r) => {
     res.writeHead(r.statusCode, r.headers);
@@ -292,7 +301,7 @@ async function loadManager() {
   let http;
   const emit = () => http?.broadcast();
   const mm = M.createManager(instances, emit);
-  const ag = A.createAgents({ instances, sendTo, emit });
+  const ag = A.createAgents({ instances, sendTo, emit, screen });
   mm.summaries = () => Object.fromEntries(Object.entries(ag.view()).map(([id, c]) => [id, { summary: c.summary, project: c.brief.project, kind: c.brief.kind, blocker: c.brief.blocker, chat: c.msgs.length > 0 }]));
   http = H.createManagerServer({
     manager: mm, agents: ag, killTerminal: (id) => { const x = instances.get(id); if (x) killInstance(x); return !!x; }, guide: GUIDE,

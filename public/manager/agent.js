@@ -60,6 +60,7 @@ function renderAgent(s, id) {
   const br = chat.brief || { next: [] };
   const sec = (label, text) => { const d = el('div', 'sec'); d.append(el('div', 'lbl', label), el('div', '', text)); return d; };
   blob.replaceChildren();
+  if (chat.screen) blob.append(el('div', 'lbl', 'Waiting on you'), el('pre', 'screen', chat.screen));
   if (br.title) blob.append(el('div', 'atitle', br.title));
   if (br.project) blob.append(el('div', 'proj', `${br.kind ? br.kind + ' · ' : ''}${br.project}`));
   if (chat.summarizing && !chat.summary) { const w = el('div', 'wait'); w.append(el('i', 'spin'), el('span', '', 'Reading the project and its recent work…')); blob.append(w); }
