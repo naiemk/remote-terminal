@@ -185,6 +185,18 @@ $('about-close').onclick = () => $('about-dlg').close();
   const get = () => { try { return Number(localStorage.getItem('voiceAt')) || 0; } catch { return 0; } };
   const set = (t) => { try { localStorage.setItem('voiceAt', String(t)); } catch {} };
   let playing = false;
+  // The built-in voices vary a lot: the best ones are "Enhanced/Premium/Siri/Natural/Neural" ones, which are free
+  // but have to be installed on the phone (iOS: Settings > Accessibility > Spoken Content > Voices).
+  const BAD = /compact|fred|albert|zarvox|bahh|bells|boing|bubbles|cellos|deranged|hysterical|organ|trinoids|whisper|wobble|superstar|jester|junior|kathy|princess|ralph|bad news|good news/i;
+  const score = (v) => (/^en/i.test(v.lang) ? 0 : -100) - (BAD.test(v.name) ? 50 : 0) + (/premium/i.test(v.name) ? 40 : 0) + (/enhanced/i.test(v.name) ? 30 : 0)
+    + (/natural|neural|online/i.test(v.name) ? 35 : 0) + (/siri/i.test(v.name) ? 25 : 0) + (/google/i.test(v.name) ? 15 : 0) + (/^(ava|zoe|evan|nathan|allison|samantha|serena|daniel|moira|karen|aaron|nicky)\b/i.test(v.name) ? 10 : 0)
+    + (/^en[-_]US/i.test(v.lang) ? 3 : 0) + (v.localService ? 1 : 0);
+  const voices = () => (ss?.getVoices() || []).filter((v) => /^en/i.test(v.lang)).sort((a, b) => score(b) - score(a));
+  const chosen = () => { let n = ''; try { n = localStorage.getItem('voiceName') || ''; } catch {} const all = voices(); return all.find((v) => v.name === n) || all[0]; };
+  const sel = $('vpick');
+  const fill = () => { const all = voices(), cur = chosen(); sel.replaceChildren(...all.map((v) => { const o = el('option', '', v.name + (/premium|enhanced|natural|neural|siri/i.test(v.name) ? ' ★' : '')); o.value = v.name; o.selected = v === cur; return o; })); };
+  if (ss) { fill(); ss.onvoiceschanged = fill; }
+  sel.onchange = () => { try { localStorage.setItem('voiceName', sel.value); } catch {} if (ss) { ss.cancel(); const u = new SpeechSynthesisUtterance('Hello, this is how I sound.'); u.voice = chosen(); ss.speak(u); } };
   const label = () => { full.textContent = playing ? '■ Stop' : '▶ Play summary'; };
   const stop = () => { playing = false; ss?.cancel(); label(); };
   const say = (text) => {
@@ -192,7 +204,7 @@ $('about-close').onclick = () => $('about-dlg').close();
     ss.cancel(); playing = true; label();
     // short chunks: some phones cut a long utterance off after about fifteen seconds
     const parts = text.match(/[^.!?]+[.!?]*\s*/g) || [text];
-    parts.forEach((p, i) => { const u = new SpeechSynthesisUtterance(p.trim()); u.lang = 'en-US'; if (i === parts.length - 1) u.onend = u.onerror = () => { playing = false; label(); }; ss.speak(u); });
+    parts.forEach((p, i) => { const u = new SpeechSynthesisUtterance(p.trim()); const v = chosen(); if (v) { u.voice = v; u.lang = v.lang; } else u.lang = 'en-US'; u.rate = 0.98; if (i === parts.length - 1) u.onend = u.onerror = () => { playing = false; label(); }; ss.speak(u); });
   };
   async function run(since, btn) {
     if (playing) return stop();
