@@ -2,6 +2,19 @@
 // Text only (textContent); nothing from an agent or a model is parsed as HTML.
 let shown = null, seen = 0;
 
+// Where a message to an agent is right now: received by the manager, forwarded, delivered, being worked on, done.
+const STAGES = ['received', 'forwarding', 'delivered', 'working', 'done'];
+function stageBar(m) {
+  const w = el('div', 'stages');
+  const st = m.state === 'delivered' || m.state === 'forwarding' || m.state === 'received' || m.state === 'working' || m.state === 'done' ? m.state : m.state === 'waiting' ? 'working' : m.state === 'ended' ? 'done' : null;
+  const at = STAGES.indexOf(st);
+  const names = { received: 'Received', forwarding: 'Forwarding', delivered: 'Delivered', working: 'Agent working', done: 'Done' };
+  if (m.state === 'failed') { w.append(el('span', 'stg bad', '✕ Not delivered')); return w; }
+  STAGES.forEach((n, i) => w.append(el('span', 'stg' + (i < at ? ' ok' : i === at ? (st === 'done' ? ' ok' : ' now') : ''), (i < at || (i === at && st === 'done') ? '✓ ' : '') + names[n])));
+  if (m.state === 'waiting') w.append(el('span', 'stg bad', 'Agent is waiting for you'));
+  return w;
+}
+
 function renderAgent(s, id) {
   const root = $('agent');
   const a = s.fleet.sessions.find((x) => x.id === id), chat = (s.agents || {})[id] || { msgs: [], pending: false, summary: '', summarizing: false };
@@ -73,7 +86,7 @@ function renderAgent(s, id) {
   chat.msgs.forEach((m, i) => {
     if (m.who === 'you') {
       const b = el('div', 'm you', m.text);
-      b.append(el('small', 'tick', m.state === 'failed' ? '✕ not delivered' : m.state === 'delivered' ? '✓ delivered' : 'sending…'));
+      b.append(stageBar(m));
       kids.push(b);
     } else if (m.who === 'progress') {
       const p = el('div', 'prog'); if (chat.pending && i === chat.msgs.length - 1) p.append(el('i', 'spin'));

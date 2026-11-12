@@ -41,7 +41,7 @@ function node(n, fleet) {
       const f = el('form', 'row'), i = el('input'), b = el('button', '', 'Send');
       i.placeholder = 'Your own instruction…'; i.dataset.key = 'tell:' + n.id;
       f.append(i, b);
-      f.onsubmit = (ev) => { ev.preventDefault(); if (i.value.trim()) { act('agent_send', { id: n.id }, i.value); i.value = ''; } };
+      f.onsubmit = (ev) => { ev.preventDefault(); const x = ev.target.querySelector('input'); if (x.value.trim()) { act('agent_send', { id: n.id }, x.value); x.value = ''; } };
       return f;
     }
     case 'input': {
@@ -49,7 +49,7 @@ function node(n, fleet) {
       i.placeholder = n.placeholder || '';
       f.append(i, b);
       i.dataset.key = n.action + ':' + n.args.terminal;
-      f.onsubmit = (ev) => { ev.preventDefault(); if (i.value.trim()) { act(n.action, n.args, i.value); i.value = ''; } };
+      f.onsubmit = (ev) => { ev.preventDefault(); const x = ev.target.querySelector('input'); if (x.value.trim()) { act(n.action, n.args, x.value); x.value = ''; } };
       return f;
     }
   }
@@ -75,30 +75,66 @@ const draft = new Map();
 function nextBox(id) {
   const a = (last?.agents || {})[id] || {}, b = a.brief || {}, d = draft.get(id) || (draft.set(id, { opt: -1, text: '' }), draft.get(id));
   const e = el('div', 'nextbox');
+  e.dataset.id = id;
   if (b.blocker) e.append(el('div', 'blocker', 'Blocked: ' + b.blocker));
   const opts = b.next || [];
   if (!opts.length) e.append(el('div', 'hint', a.summarizing ? 'Reading the project to suggest next moves…' : 'No suggestions yet.'));
   const send = el('button', 'send', 'Send');
   const input = el('input'); input.dataset.key = 'ctx:' + id; input.value = d.text; input.autocomplete = 'off';
-  const sync = () => { input.placeholder = d.opt >= 0 ? 'Add context (optional)…' : 'Or type your own instruction…'; send.disabled = a.pending || (d.opt < 0 && !d.text.trim()); };
+  // Handlers read the live DOM, never captured nodes: a patched card keeps its old elements and takes the new handlers.
+  const sync = (root) => {
+    const dd = draft.get(id), inp = root.querySelector('input'), sb = root.querySelector('button.send');
+    inp.placeholder = dd.opt >= 0 ? 'Add context (optional)…' : 'Or type your own instruction…';
+    sb.disabled = !!(((last?.agents || {})[id] || {}).pending) || (dd.opt < 0 && !dd.text.trim());
+  };
   opts.forEach((o, i) => {
     const bt = el('button', 'opt' + (d.opt === i ? ' sel' : ''), o.label); bt.title = o.prompt;
-    bt.onclick = () => { d.opt = d.opt === i ? -1 : i; for (const x of e.querySelectorAll('button.opt')) x.classList.remove('sel'); if (d.opt >= 0) bt.classList.add('sel'); sync(); };
+    bt.onclick = (ev) => {
+      const root = ev.target.closest('.nextbox'), dd = draft.get(id);
+      dd.opt = dd.opt === i ? -1 : i;
+      root.querySelectorAll('button.opt').forEach((x, j) => x.classList.toggle('sel', j === dd.opt));
+      sync(root);
+    };
     e.append(bt);
   });
   const f = el('form', 'row'); f.append(input, send);
-  input.oninput = () => { d.text = input.value; sync(); };
+  input.oninput = (ev) => { draft.get(id).text = ev.target.value; sync(ev.target.closest('.nextbox')); };
   f.onsubmit = (ev) => {
     ev.preventDefault();
-    const t = [d.opt >= 0 ? opts[d.opt]?.prompt : '', d.text.trim() ? (d.opt >= 0 ? 'Additional context: ' : '') + d.text.trim() : ''].filter(Boolean).join('\n\n');
+    const dd = draft.get(id), root = ev.target.closest('.nextbox'), cur = ((last?.agents || {})[id]?.brief?.next) || [];
+    const t = [dd.opt >= 0 ? cur[dd.opt]?.prompt : '', dd.text.trim() ? (dd.opt >= 0 ? 'Additional context: ' : '') + dd.text.trim() : ''].filter(Boolean).join('\n\n');
     if (!t) return;
-    draft.set(id, { opt: -1, text: '' }); send.disabled = true; input.value = '';
+    draft.set(id, { opt: -1, text: '' }); root.querySelector('input').value = '';
+    root.querySelectorAll('button.opt').forEach((x) => x.classList.remove('sel'));
+    sync(root);
     act('agent_send', { id }, t);
   };
-  sync();
   e.append(f);
-  if (a.pending) e.append(el('div', 'hint', 'Sent. The agent is working on it…'));
+  sync(e);
+  const m = (a.msgs || []).findLast((x) => x.who === 'you');
+  if (m && (a.pending || m.state === 'failed')) e.append(stageBar(m));
   return e;
+}
+
+// Patch the live DOM to match a freshly built tree instead of replacing it, so a box you are typing in keeps
+// its text, focus, cursor and on-screen keyboard however often the board updates.
+function morph(old, nw) {
+  if (old.nodeType === 3 || nw.nodeType === 3) { if (old.nodeType === 3 && nw.nodeType === 3) { if (old.data !== nw.data) old.data = nw.data; return old; } old.replaceWith(nw); return nw; }
+  if (old.tagName !== nw.tagName) { old.replaceWith(nw); return nw; }
+  if (old.className !== nw.className) old.className = nw.className;
+  for (const a of [...old.attributes]) if (a.name !== 'class' && a.name !== 'value' && !nw.hasAttribute(a.name)) old.removeAttribute(a.name);
+  for (const a of nw.attributes) if (a.name !== 'class' && a.name !== 'value' && old.getAttribute(a.name) !== a.value) old.setAttribute(a.name, a.value);
+  for (const h of ['onclick', 'onsubmit', 'oninput']) old[h] = nw[h];
+  if (old.disabled !== nw.disabled) old.disabled = nw.disabled;
+  if (old.tagName === 'INPUT' || old.tagName === 'TEXTAREA') {
+    if (old.placeholder !== nw.placeholder) old.placeholder = nw.placeholder;
+    if (old.dataset.key !== nw.dataset.key) old.value = nw.value; // a different box now: take its text
+    return old;
+  }
+  const o = [...old.childNodes], n = [...nw.childNodes];
+  n.forEach((c, i) => { if (o[i]) morph(o[i], c); else old.append(c); });
+  for (let i = n.length; i < o.length; i++) o[i].remove();
+  return old;
 }
 
 // What to show before the manager has designed anything, or when it is off.
@@ -126,15 +162,8 @@ function render(s) {
   const k = el('button', '', 'Keep all going'); k.title = "Send each idle agent its top suggested move";
   k.onclick = async () => { k.disabled = true; await act('continue_all'); k.disabled = false; };
   bar.append(b, r, k);
-  // Redraw in place, keeping whatever is being typed in the cards' boxes.
-  const typed = new Map(), f = document.activeElement;
-  for (const i of document.querySelectorAll('#ui input')) if (i.value) typed.set(i.dataset.key, i.value);
-  const focusKey = f && f.closest('#ui') ? f.dataset.key : null, pos = focusKey ? f.selectionStart : 0;
-  $('ui').replaceChildren(node(s.running && s.ui ? s.ui : fallback(s.fleet), s.fleet));
-  for (const i of document.querySelectorAll('#ui input')) {
-    if (typed.has(i.dataset.key)) i.value = typed.get(i.dataset.key);
-    if (i.dataset.key === focusKey) { i.focus(); try { i.setSelectionRange(pos, pos); } catch {} }
-  }
+  const tree = node(s.running && s.ui ? s.ui : fallback(s.fleet), s.fleet), ui = $('ui');
+  if (ui.firstChild) morph(ui.firstChild, tree); else ui.append(tree);
   const busy = $('busy'); busy.hidden = !s.busy;
   if (s.busy) busy.lastChild.textContent = s.busy.reason === 'user' ? 'Manager is thinking about your message…' : 'Manager is updating the board…';
   const log = $('log'), atEnd = log.children.length !== (s.log || []).length;
@@ -148,7 +177,14 @@ function go() {
   const es = new EventSource('events');
   es.onopen = () => { $('dot').className = 'dot'; $('conn').textContent = 'live'; };
   es.onerror = () => { $('dot').className = 'dot off'; $('conn').textContent = 'reconnecting'; };
-  es.onmessage = (e) => { const v = JSON.parse(e.data); if (v.type === 'STATE_SNAPSHOT') render(v.snapshot); };
+  // Snapshots arrive on every poll; draw at most once a frame, and not at all when nothing changed.
+  let queued = null, prev = '';
+  es.onmessage = (e) => {
+    const v = JSON.parse(e.data); if (v.type !== 'STATE_SNAPSHOT') return;
+    if (e.data === prev) return; prev = e.data;
+    if (!queued) requestAnimationFrame(() => { const x = queued; queued = null; render(x); });
+    queued = v.snapshot;
+  };
 }
 $('msg').onsubmit = async (e) => { e.preventDefault(); const i = e.target.t; if (i.value.trim()) { const t = i.value; i.value = ''; $('busy').hidden = false; $('busy').lastChild.textContent = 'Sending…'; await act('message', {}, t); } };
 go();
