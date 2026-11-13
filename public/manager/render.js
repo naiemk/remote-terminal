@@ -148,9 +148,11 @@ function fallback(fleet) {
 }
 
 // Which voice the briefing will use: the server's neural one (plays with the phone locked) or the browser's.
+let srv = null; // the server's own voice list (macOS), when it has one
 function vstatus(v) {
   const t = $('vstat'), x = v?.state;
-  t.textContent = x === 'ready' ? 'Voice: neural (plays with the screen locked)' : x === 'installing' ? 'Voice: installing the neural voice (~110 MB)…'
+  const had = srv?.voices?.length; srv = v?.voices?.length ? v : null; if (!!srv !== !!had || srv) window.fillVoices?.();
+  t.textContent = x === 'ready' && srv ? `Voice: ${srv.voice} (plays with the screen locked)` : x === 'ready' ? 'Voice: neural (plays with the screen locked)' : x === 'installing' ? 'Voice: installing the neural voice (~110 MB)…'
     : x === 'failed' ? `Voice: install failed (${v.error}). Using the browser voice.` : x === 'broken' ? `Voice: neural voice is installed but failed to run (${v.error}). Using the browser voice.` : x === 'unsupported' ? 'Voice: no neural voice for this machine. Using the browser voice.'
     : 'Voice: browser voice (the server has not started the neural install; restart it or retry)';
   if (x === 'failed' || x === 'unknown') { const b = el('button', '', 'Retry install'); b.onclick = () => act('voice_install'); t.append(' ', b); }
@@ -243,9 +245,26 @@ $('about-close').onclick = () => $('about-dlg').close();
   const voices = () => (ss?.getVoices() || []).filter((v) => !BAD.test(v.name) || /premium|enhanced/i.test(v.name)).sort((a, b) => score(b) - score(a));
   const chosen = () => { let n = ''; try { n = localStorage.getItem('voiceName') || ''; } catch {} const all = voices(); return all.find((v) => v.name === n) || all[0]; };
   const sel = $('vpick');
-  const fill = () => { const all = voices(), cur = chosen(); sel.replaceChildren(...all.map((v) => { const o = el('option', '', v.name + (/^en/i.test(v.lang) ? '' : ` (${v.lang})`) + (/premium|enhanced|natural|neural|siri/i.test(v.name) ? ' ★' : '')); o.value = v.name; o.selected = v === cur; return o; })); };
+  let key = '';
+  const fill = () => {
+    if (srv) { // the server speaks: choose among the voices installed on its machine
+      const k = srv.voices.map((v) => v.name).join('|') + '\n' + srv.voice;
+      if (k === key) return; key = k;
+      sel.replaceChildren(...srv.voices.map((v) => { const o = el('option', '', v.name + (/^en/i.test(v.lang) ? '' : ` (${v.lang})`) + (/premium|enhanced/i.test(v.name) ? ' ★' : '')); o.value = v.name; o.selected = v.name === srv.voice; return o; }));
+      return;
+    }
+    key = ''; const all = voices(), cur = chosen(); sel.replaceChildren(...all.map((v) => { const o = el('option', '', v.name + (/^en/i.test(v.lang) ? '' : ` (${v.lang})`) + (/premium|enhanced|natural|neural|siri/i.test(v.name) ? ' ★' : '')); o.value = v.name; o.selected = v === cur; return o; }));
+  };
+  window.fillVoices = fill;
   if (ss) { fill(); ss.onvoiceschanged = fill; }
-  sel.onchange = () => { try { localStorage.setItem('voiceName', sel.value); } catch {} if (ss) { ss.cancel(); const u = new SpeechSynthesisUtterance('Hello, this is how I sound.'); u.voice = chosen(); ss.speak(u); } };
+  sel.onchange = async () => {
+    if (srv) { // tell the server, then play a sample in the new voice
+      au.src = SILENT; au.play().catch(() => {});
+      const r = await fetch('api/act', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'voice_set', args: { name: sel.value } }) }).then((x) => x.json()).catch(() => ({}));
+      if (r.audio) play(r.audio);
+      return;
+    }
+    try { localStorage.setItem('voiceName', sel.value); } catch {} if (ss) { ss.cancel(); const u = new SpeechSynthesisUtterance('Hello, this is how I sound.'); u.voice = chosen(); ss.speak(u); } };
   const label = () => { full.textContent = playing ? '■ Stop' : '▶ Play summary'; };
   const au = $('vaudio'), SILENT = 'data:audio/wav;base64,UklGRiQAAAAXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
   const stop = () => { playing = false; ss?.cancel(); au.pause(); au.currentTime = 0; label(); };
