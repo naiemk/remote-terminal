@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 
 const DIR = process.env.PIPER_DIR || path.join(os.homedir(), '.local', 'share', 'remote-terminal', 'piper');
 const BIN = path.join(DIR, 'piper', 'piper');
@@ -16,6 +16,30 @@ const VOICE = 'en_US-lessac-medium';
 const VOICE_URL = `https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/${VOICE}`;
 const ARCHIVES = { 'linux-x64': 'piper_linux_x86_64.tar.gz', 'linux-arm64': 'piper_linux_aarch64.tar.gz', 'darwin-x64': 'piper_macos_x64.tar.gz', 'darwin-arm64': 'piper_macos_aarch64.tar.gz' };
 const MAC = process.platform === 'darwin'; // Piper's macOS download ships without its libraries, so macOS uses the built-in `say`
+const PREF = path.join(path.dirname(DIR), 'voice.json'); // the voice picked in the manager menu (macOS)
+const BAD = /compact|fred|albert|zarvox|bahh|bells|boing|bubbles|cellos|deranged|hysterical|organ|trinoids|whisper|wobble|superstar|jester|junior|kathy|princess|ralph|bad news|good news/i;
+const rank = (v) => (/^en/i.test(v.lang) ? 0 : -100) - (BAD.test(v.name) ? 50 : 0) + (/premium/i.test(v.name) ? 40 : 0) + (/enhanced/i.test(v.name) ? 30 : 0) + (/^en[_-]US/i.test(v.lang) ? 3 : 0);
+let listed = { at: 0, all: [] };
+// The voices installed on this Mac (System Settings > Accessibility > Spoken Content), best first, novelty ones hidden.
+function macVoices() {
+  if (Date.now() - listed.at < 30_000) return listed.all;
+  let all = [];
+  try {
+    all = execFileSync('say', ['-v', '?'], { encoding: 'utf8', timeout: 5000 }).split('\n')
+      .map((l) => /^(.+?)\s+([a-z]{2,3}[_-][A-Za-z0-9]+)\s+#/.exec(l)).filter(Boolean).map((m) => ({ name: m[1].trim(), lang: m[2] }))
+      .filter((v) => !BAD.test(v.name) || /premium|enhanced/i.test(v.name)).sort((a, b) => rank(b) - rank(a));
+  } catch {}
+  listed = { at: Date.now(), all };
+  return all;
+}
+const picked = () => { try { return JSON.parse(fs.readFileSync(PREF, 'utf8')).name || ''; } catch { return ''; } };
+const macVoice = () => { const all = macVoices(), n = picked(); return all.find((v) => v.name === n)?.name || all[0]?.name || ''; };
+export function setVoice(name) {
+  if (!MAC || !macVoices().some((v) => v.name === name)) return false;
+  fs.mkdirSync(path.dirname(PREF), { recursive: true });
+  fs.writeFileSync(PREF, JSON.stringify({ name }));
+  return true;
+}
 let installing = null;
 const st = { state: 'unknown', error: '' }; // installing | failed | unsupported | ready (see status())
 
@@ -60,7 +84,7 @@ export function ensure(log = () => {}) {
   return installing;
 }
 
-export const status = () => (MAC ? (st.synthError ? { state: 'broken', error: st.synthError } : { state: 'ready', error: '' }) : fs.existsSync(BIN) && model() ? (st.synthError ? { state: 'broken', error: st.synthError } : { state: 'ready', error: '' }) : { ...st });
+export const status = () => (MAC ? { ...(st.synthError ? { state: 'broken', error: st.synthError } : { state: 'ready', error: '' }), voices: macVoices(), voice: macVoice() } : fs.existsSync(BIN) && model() ? (st.synthError ? { state: 'broken', error: st.synthError } : { state: 'ready', error: '' }) : { ...st });
 
 export function createTts() {
   ensure((m) => console.log(m));
@@ -71,7 +95,7 @@ export function createTts() {
     return new Promise((resolve, reject) => {
       const out = path.join(os.tmpdir(), `rt-tts-${crypto.randomUUID()}.wav`);
       const p = MAC
-        ? spawn('say', [...(process.env.SAY_VOICE ? ['-v', process.env.SAY_VOICE] : []), '-o', out, '--data-format=LEI16@22050', '-f', '-'], { stdio: ['pipe', 'ignore', 'pipe'] })
+        ? spawn('say', [...(macVoice() ? ['-v', macVoice()] : []), '-o', out, '--data-format=LEI16@22050', '-f', '-'], { stdio: ['pipe', 'ignore', 'pipe'] })
         : spawn(BIN, ['-m', model(), '-f', out, '-q'], { cwd: path.dirname(BIN), env: { ...process.env, DYLD_LIBRARY_PATH: path.dirname(BIN) + (process.env.DYLD_LIBRARY_PATH ? ':' + process.env.DYLD_LIBRARY_PATH : ''), LD_LIBRARY_PATH: path.dirname(BIN) + (process.env.LD_LIBRARY_PATH ? ':' + process.env.LD_LIBRARY_PATH : '') }, stdio: ['pipe', 'ignore', 'pipe'] });
       let err = '';
       p.stderr.on('data', (d) => { err = (err + d).slice(-300); });

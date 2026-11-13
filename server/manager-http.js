@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createVoice } from './voice.js';
-import { createTts, ensure as ensureVoice, status as voiceStatus } from './tts.js';
+import { createTts, ensure as ensureVoice, setVoice, status as voiceStatus } from './tts.js';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
@@ -58,6 +58,10 @@ export function createManagerServer({ manager, agents, killTerminal, guide, dir,
         const jobs = b.action === 'tell_all' ? (text ? idle.map((id) => [id, text]) : []) : agents.nextMoves(idle);
         await Promise.all(jobs.map(([id, p]) => agents.send(id, p)));
         result = { ok: true, sent: jobs.length, skipped: manager.fleet().sessions.length - jobs.length };
+      }
+      else if (b.action === 'voice_set') {
+        if (!setVoice(String(b.args?.name || ''))) result = { ok: false, error: 'unknown voice' };
+        else { result.audio = await tts.clip('Hello, this is how I sound.'); broadcast(); }
       }
       else if (b.action === 'voice_install') { ensureVoice((m) => console.log(m)); }
       else if (b.action === 'voice') { result = await voice.speak(b.args?.since); if (result.ok) result.audio = await tts.clip(result.text); }
