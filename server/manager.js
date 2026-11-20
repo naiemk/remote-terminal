@@ -64,8 +64,11 @@ export function createManager(instances, emit) {
     if (queue.length) run('user', queue.shift());
   }
 
-  function tick() {
-    const cur = snapshot(instances);
+  let ticking = false;
+  async function tick() {
+    if (ticking) return;
+    ticking = true;
+    let cur; try { cur = await snapshot(instances); } finally { ticking = false; }
     const changes = diff(last, cur);
     const first = !last;
     last = cur;
@@ -76,7 +79,7 @@ export function createManager(instances, emit) {
 
   const api = {
     state,
-    fleet: () => last || snapshot(instances),
+    fleet: () => last || { now: Date.now() / 1000, sessions: [] },
     isRunning: () => running,
     start() { if (running) return; running = true; tick(); timer ||= setInterval(tick, POLL_MS); run('start'); },
     stop() { running = false; queue.length = 0; clearInterval(timer); timer = null; state.ui = null; emit(); },
