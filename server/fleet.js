@@ -3,25 +3,28 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 
 const HOME = path.join(os.homedir(), '.claude');
 const tildify = (p) => (p || '').replace(os.homedir(), '~');
 
+// Never block the event loop on a child process: the terminals' I/O runs on it too.
+const run = (cmd, args, timeout) => new Promise((resolve) => {
+  execFile(cmd, args, { encoding: 'utf8', timeout, maxBuffer: 8 << 20, stdio: ['ignore', 'pipe', 'ignore'] }, (err, out) => resolve(err ? '' : out));
+});
+
 // One `ps` call gives every process's parent; works on Linux and macOS (there is no /proc on macOS).
-function parents() {
+async function parents() {
   const map = new Map();
-  try {
-    for (const l of execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 5000 }).split('\n')) {
-      const [pid, ppid] = l.trim().split(/\s+/).map(Number);
-      if (pid) map.set(pid, ppid);
-    }
-  } catch {}
+  for (const l of (await run('ps', ['-A', '-o', 'pid=,ppid='], 5000)).split('\n')) {
+    const [pid, ppid] = l.trim().split(/\s+/).map(Number);
+    if (pid) map.set(pid, ppid);
+  }
   return map;
 }
 
 // Is `pid` the process `root`, or one of its descendants?
-export function descendsFrom(pid, root, map = parents()) {
+export function descendsFrom(pid, root, map) {
   for (let p = pid, i = 0; p > 1 && i < 40; p = map.get(p) || 0, i++) if (p === root) return true;
   return false;
 }
@@ -96,9 +99,9 @@ export function digest(sessionId, sinceMs = 0, max = 30) {
 
 // `instances` is the server's Map of terminals; a session started in one of them gets its id
 // (`terminal`) so it can be talked to and opened. Others are visible but read-only.
-export function snapshot(instances) {
+export async function snapshot(instances) {
   const sessions = [];
-  const procs = parents();
+  const procs = await parents();
   let files = [];
   try { files = fs.readdirSync(path.join(HOME, 'sessions')).filter((f) => f.endsWith('.json')); } catch {}
   for (const f of files) {
@@ -133,18 +136,19 @@ export function diff(prev, cur) {
 
 // What the project in `cwd` is, from its own files: git state plus the head of its README and any
 // roadmap/todo file. Cheap, no LLM; handed to the model so it can see the bigger picture.
-export function projectContext(cwd) {
+export async function projectContext(cwd) {
   const dir = (cwd || '').replace(/^~/, os.homedir());
   if (!dir || !fs.existsSync(dir)) return '';
-  const git = (...a) => { try { return execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } };
+  const git = async (...a) => (await run('git', ['-C', dir, ...a], 4000)).trim();
+  const [branch, status, log] = await Promise.all([git('rev-parse', '--abbrev-ref', 'HEAD'), git('status', '--short'), git('log', '--oneline', '-8')]);
   const head = (names, n) => {
     for (const f of names) { try { return `${f}:\n${fs.readFileSync(path.join(dir, f), 'utf8').slice(0, n)}`; } catch {} }
     return '';
   };
   return [
-    `branch: ${git('rev-parse', '--abbrev-ref', 'HEAD')}`,
-    `uncommitted:\n${git('status', '--short').split('\n').slice(0, 12).join('\n')}`,
-    `recent commits:\n${git('log', '--oneline', '-8')}`,
+    `branch: ${branch}`,
+    `uncommitted:\n${status.split('\n').slice(0, 12).join('\n')}`,
+    `recent commits:\n${log}`,
     head(['README.md', 'readme.md', 'README'], 900),
     head(['ROADMAP.md', 'TODO.md', 'docs/roadmap.md', 'PLAN.md', 'STATUS.md', 'CLAUDE.md'], 900),
   ].filter(Boolean).join('\n\n');

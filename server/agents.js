@@ -57,7 +57,11 @@ export function createAgents({ instances, sendTo, emit, screen = () => '' }) {
     if (c.msgs.length > MAX_MSGS) c.msgs.splice(0, c.msgs.length - MAX_MSGS);
     return m;
   };
-  const find = (id) => snapshot(instances).sessions.find((s) => s.id === id);
+  // Sessions as of the last snapshot. Snapshots run child processes, so they are async and every
+  // caller that needs fresh data goes through fresh(); find() just reads the latest.
+  let known = [];
+  const fresh = async () => (known = (await snapshot(instances)).sessions);
+  const find = (id) => known.find((s) => s.id === id);
 
   // One attempt: a headless Haiku calls SendMessage once. It must answer DELIVERED or FAILED: <why>;
   // anything else (a refusal, chatter, a timeout) counts as a failure so we can retry.
@@ -93,7 +97,7 @@ Never call SendMessage a second time. Reply with nothing else.`);
   async function deliverPeer(s, text) {
     let err = 'unknown error';
     for (let i = 0; i < 3; i++) {
-      const cur = i ? find(s.id) : s;
+      const cur = i ? (await fresh(), find(s.id)) : s;
       if (!cur) return { ok: false, error: 'this agent ended' };
       if (!sockOk(cur.socket)) return { ok: false, error: 'this session has no message socket' };
       if (!fs.existsSync(cur.socket)) return { ok: false, error: 'the session\'s message socket is gone; it may have exited' };
@@ -109,8 +113,9 @@ Never call SendMessage a second time. Reply with nothing else.`);
   // Accepts a message at once (stage "received") and delivers it in the background, so the page can show
   // each stage: received -> forwarding -> delivered -> working (or waiting on you) -> done / failed.
   const stage = (c, m, state) => { m.state = state; (m.at ||= {})[state] = Date.now(); };
-  function send(id, text) {
+  async function send(id, text) {
     text = String(text || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 2000);
+    await fresh();
     const s = find(id);
     if (!s || !text) return { ok: false, error: s ? 'empty message' : 'no such agent' };
     const c = chat(id);
@@ -149,7 +154,7 @@ Never call SendMessage a second time. Reply with nothing else.`);
   // three suggested next moves; refreshed when the transcript has moved on.
   async function brief(s) {
     const d = digest(s.sid);
-    const prompt = `Agent "${s.name}" (${s.status}) in ${s.cwd}\n\nPROJECT\n${projectContext(s.cwd)}\n\nRECENT ACTIVITY\n${d.text}`;
+    const prompt = `Agent "${s.name}" (${s.status}) in ${s.cwd}\n\nPROJECT\n${await projectContext(s.cwd)}\n\nRECENT ACTIVITY\n${d.text}`;
     let lastErr;
     for (let i = 0; i < 2; i++) {
       try {
@@ -169,6 +174,7 @@ Never call SendMessage a second time. Reply with nothing else.`);
   }
 
   async function refreshSummary(id) {
+    if (!find(id)) await fresh();
     const s = find(id), c = chat(id);
     if (!s || c.summary.busy || (c.summary.for && c.summary.for >= (s.mtime || 0)) || c.pending) return;
     const d = digest(s.sid);
@@ -211,7 +217,7 @@ Never call SendMessage a second time. Reply with nothing else.`);
   async function tick() {
     const waiting = [...chats].filter(([, c]) => c.pending);
     if (!waiting.length) { clearInterval(timer); timer = null; return; }
-    const sessions = snapshot(instances).sessions;
+    const sessions = await fresh();
     for (const [id, c] of waiting) {
       const p = c.pending, s = sessions.find((x) => x.id === id), age = Date.now() - p.since;
       if (p.msg && (p.msg.state === 'received' || p.msg.state === 'forwarding')) continue; // still being handed over
@@ -238,7 +244,7 @@ Never call SendMessage a second time. Reply with nothing else.`);
     if (scanning) return;
     scanning = true;
     try {
-      const todo = snapshot(instances).sessions.filter((s) => {
+      const todo = (await fresh()).filter((s) => {
         const c = chat(s.id).summary;
         return !c.busy && !(c.for && c.for >= (s.mtime || 0)) && !(c.error && Date.now() - (c.failedAt || 0) < 300_000);
       });
