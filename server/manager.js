@@ -37,7 +37,7 @@ export function createManager(instances, emit) {
     emit();
     const changes = pending; pending = []; lastRun = Date.now();
     try {
-      const compact = last.sessions.map((s) => ({ id: s.id, name: s.name, status: s.status, cwd: s.cwd, terminal: s.terminal, lastText: s.lastText?.slice(0, 200) }));
+      const compact = api.fleet().sessions.map((s) => ({ id: s.id, name: s.name, status: s.status, cwd: s.cwd, terminal: s.terminal, lastText: s.lastText?.slice(0, 200) }));
       const prompt = JSON.stringify({ reason, userMessage, changes, sessions: compact, agentSummaries: api.summaries?.() || {}, previousSummary: state.summary });
       let json, lastErr;
       for (let attempt = 0; attempt < 2 && !json; attempt++) { // one retry: a bad reply or a flaky spawn is usually transient
@@ -81,7 +81,11 @@ export function createManager(instances, emit) {
     state,
     fleet: () => last || { now: Date.now() / 1000, sessions: [] },
     isRunning: () => running,
-    start() { if (running) return; running = true; tick(); timer ||= setInterval(tick, POLL_MS); run('start'); },
+    start() {
+      if (running) return; running = true;
+      timer ||= setInterval(() => tick().catch(() => {}), POLL_MS);
+      tick().catch(() => {}).then(() => { if (running) run('start'); }); // the first snapshot is async: run() needs it
+    },
     stop() { running = false; queue.length = 0; clearInterval(timer); timer = null; state.ui = null; emit(); },
     note,
     message(text) {
@@ -91,7 +95,7 @@ export function createManager(instances, emit) {
       if (busy) { queue.push(t); note('manager', 'Still working on the last one; yours is queued.'); return emit(); }
       run('user', t);
     },
-    poll: tick,
+    poll: () => tick().catch(() => {}),
   };
   return api;
 }

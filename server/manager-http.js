@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import { createVoice } from './voice.js';
 import { createTts, ensure as ensureVoice, setVoice, status as voiceStatus } from './tts.js';
 
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
 
 export function createManagerServer({ manager, agents, killTerminal, guide, dir, port, checkRequest, sendTo, readBody, reload, about }) {
   const clients = new Set();

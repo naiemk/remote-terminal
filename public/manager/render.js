@@ -2,11 +2,13 @@
 // never parsed as HTML.
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-let last = null;
+let last = null, actErr = '';
 
 async function act(action, args, text) {
   const r = await fetch('api/act', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, args, text }) });
-  if (!r.ok) $('err').textContent = (await r.json().catch(() => ({}))).error || 'failed';
+  const j = await r.json().catch(() => ({}));
+  actErr = (!r.ok || j.ok === false) ? (j.error || 'failed') : '';
+  $('err').textContent = actErr;
 }
 
 function node(n, fleet) {
@@ -14,7 +16,7 @@ function node(n, fleet) {
     case 'stack': { const e = el('div', 'stack'); for (const c of n.children) e.append(node(c, fleet)); return e; }
     case 'stats': { const e = el('div', 'stats'); for (const i of n.items) { const s = el('div', 'stat'); s.append(el('b', '', i.value), el('span', '', i.label)); e.append(s); } return e; }
     case 'card': {
-      const e = el('div', 'card'), top = el('div', 'top');
+      const e = el('div', 'card' + (n.cls ? ' ' + n.cls : '')), top = el('div', 'top');
       top.append(el('span', 'title', n.title));
       if (n.badge) top.append(el('span', 'badge ' + n.badge.toLowerCase().replace(/\W/g, ''), n.badge));
       e.append(top);
@@ -65,7 +67,8 @@ const consoleUrl = (id) => `${app || location.origin}/#${encodeURIComponent(id)}
 // your own instruction. Sends go through the agent's chat, so progress shows on its page.
 function sessionCard(s) {
   const a = (last?.agents || {})[s.id], b = a?.brief || {};
-  return { type: 'card', title: b.title || s.name, subtitle: b.project || s.cwd, badge: s.status, text: b.task || s.lastText || '', children: [
+  const where = s.terminal ? 'Remote Terminal' : 'outside Remote Terminal';
+  return { type: 'card', cls: 'agent ' + String(s.status).toLowerCase().replace(/\W/g, ''), title: s.name, subtitle: `${where} · ${s.cwd}`, badge: s.status, text: [b.title, b.task || s.lastText].filter(Boolean).join(' — '), children: [
     { type: 'next', id: s.id },
     { type: 'button', label: 'Open chat', action: 'open_chat', args: { id: s.id } }] };
 }
@@ -167,7 +170,7 @@ function render(s) {
   $('board').hidden = !!id; $('agent').hidden = !id;
   if (id) return renderAgent(s, id);
   $('summary').textContent = s.summary || (s.running ? 'Manager is starting…' : 'Manager is off. Showing a plain overview.');
-  $('err').textContent = s.error ? 'Manager error: ' + s.error : '';
+  $('err').textContent = s.error ? 'Manager error: ' + s.error : actErr;
   const bar = $('bar'); bar.replaceChildren();
   const b = el('button', '', s.running ? 'Stop manager' : 'Start manager');
   b.onclick = () => act(s.running ? 'stop' : 'start');
@@ -175,7 +178,7 @@ function render(s) {
   const k = el('button', '', 'Keep all going'); k.title = "Send each idle agent its top suggested move";
   k.onclick = async () => { k.disabled = true; await act('continue_all'); k.disabled = false; };
   bar.append(b, r, k);
-  const tree = node(s.running && s.ui ? s.ui : fallback(s.fleet), s.fleet), ui = $('ui');
+  const tree = node(fallback(s.fleet), s.fleet) // a fixed board: the model's layout reshuffled cards between updates, ui = $('ui');
   if (ui.firstChild) morph(ui.firstChild, tree); else ui.append(tree);
   const busy = $('busy'); busy.hidden = !s.busy;
   if (s.busy) busy.lastChild.textContent = s.busy.reason === 'user' ? 'Manager is thinking about your message…' : 'Manager is updating the board…';

@@ -99,6 +99,13 @@ export function digest(sessionId, sinceMs = 0, max = 30) {
 
 // `instances` is the server's Map of terminals; a session started in one of them gets its id
 // (`terminal`) so it can be talked to and opened. Others are visible but read-only.
+// Claude auto-names sessions "<folder>-<2 chars>" (plaee-6f, remote-terminal-35); those say nothing, so only a
+// name that is not of that shape (one you typed with /rename) counts.
+function givenName(s) {
+  const n = String(s.name || '').trim(), base = path.basename(s.cwd || '');
+  return n && !new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-[0-9a-z]{2}$`, 'i').test(n) ? n : '';
+}
+
 export async function snapshot(instances) {
   const sessions = [];
   const procs = await parents();
@@ -109,12 +116,17 @@ export async function snapshot(instances) {
     if (s.kind !== 'interactive' || !s.pid || !procs.has(s.pid)) continue;
     const owner = [...instances.values()].find((x) => descendsFrom(s.pid, x.pty.pid, procs));
     sessions.push({
-      id: String(s.sessionId).slice(0, 8), name: s.name || path.basename(s.cwd || '') || String(s.pid),
+      id: String(s.sessionId).slice(0, 8), name: (owner?.name || '').trim() || givenName(s) || path.basename(s.cwd || '') || String(s.pid),
       status: s.status || 'unknown', cwd: tildify(s.cwd), started: s.startedAt / 1000, updated: (s.updatedAt || 0) / 1000,
       terminal: owner?.id || null, sid: String(s.sessionId), socket: s.messagingSocketPath || '', ...activity(s.sessionId),
     });
   }
-  sessions.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+  // A stable order (oldest first) so cards never jump, and unique names so each card is unmistakable:
+  // the terminal's own name wins, then the session's name, then its project folder; clashes get " 2", " 3"…
+  sessions.sort((a, b) => (a.started || 0) - (b.started || 0) || (a.id < b.id ? -1 : 1));
+  const total = new Map(), seen = new Map();
+  for (const x of sessions) total.set(x.name, (total.get(x.name) || 0) + 1);
+  for (const x of sessions) if (total.get(x.name) > 1) { const n = (seen.get(x.name) || 0) + 1; seen.set(x.name, n); x.name = `${x.name} ${n}`; }
   return { now: Date.now() / 1000, sessions };
 }
 
