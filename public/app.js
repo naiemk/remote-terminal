@@ -667,19 +667,26 @@ function toast(msg) {
 // gesture, which an awaited navigator.clipboard call can lose); the async API is the fallback.
 function copyText(text) {
   if (!text) return false;
-  const ta = Object.assign(document.createElement('textarea'), { value: text, readOnly: true });
-  ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0;font-size:16px'; // 16px stops iOS zooming
-  document.body.append(ta);
-  ta.focus({ preventScroll: true }); ta.select(); ta.setSelectionRange(0, text.length); // iOS needs the range
-  let ok = false;
-  try { ok = document.execCommand('copy'); } catch {}
-  ta.remove();
-  term?.focus();
-  const done = () => { navigator.vibrate?.(8); toast('Copied'); return true; };
-  if (ok) return done();
-  if (!navigator.clipboard) { toast('Copy failed: select it in the Copy view'); return false; }
-  navigator.clipboard.writeText(text).then(done, () => toast('Copy failed: select it in the Copy view'));
-  return true;
+  const done = () => { navigator.vibrate?.(8); toast('Copied'); };
+  const fail = () => toast('Copy failed: select it in the Copy view');
+  // Legacy path: a hidden textarea and execCommand (works on plain http and older iOS).
+  const legacy = () => {
+    const ta = Object.assign(document.createElement('textarea'), { value: text, readOnly: true });
+    ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0;font-size:16px'; // 16px stops iOS zooming
+    document.body.append(ta);
+    ta.focus({ preventScroll: true }); ta.select(); ta.setSelectionRange(0, text.length); // iOS needs the range
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch {}
+    ta.remove(); term?.focus();
+    return ok;
+  };
+  // Prefer the async Clipboard API (HTTPS / localhost); it does not depend on focus or the selection.
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done, () => (legacy() ? done() : fail()));
+    return true;
+  }
+  if (legacy()) { done(); return true; }
+  fail(); return false;
 }
 
 async function pasteClipboard() {
