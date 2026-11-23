@@ -30,6 +30,7 @@ Terminals belong to the server, not to the browser. Close the tab, lock the phon
 * **Scroll** with your finger, the trackpad or the mouse wheel, like any page: it moves smoothly and keeps gliding after a flick. When new output arrives while you're scrolled back, the view stays put. Typing or scrolling to the end takes you back to the live bottom. In full-screen apps that have no history of their own (`less`, `vim`, Codex), the same gesture scrolls inside the app.
 * The **key bar** along the bottom has the keys a phone keyboard lacks: `esc`, `tab`, `⇧tab`, `^C`, the arrows, `⏎`, `^D`, `^L`, `pgup` and `pgdn`. Swipe it sideways for more.
 * Tapping the terminal doesn't open the phone keyboard. Tap **⌨** at the end of the key bar to type straight into the terminal.
+* **Shift+Enter** or **Ctrl+Enter** starts a new line in Claude Code instead of sending (it sends Esc+Enter, like Option+Enter).
 
 ## Compose: type or dictate
 

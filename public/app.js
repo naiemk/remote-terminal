@@ -745,9 +745,16 @@ document.addEventListener('selectionchange', () => {
   if (!$('#copyview').hidden) $('#copy-all').textContent = selectedCopyText() ? 'Copy selection' : 'Copy all';
 });
 
-// Desktop: Ctrl+Shift+C / Cmd+C copy the selection, Ctrl+Shift+V pastes. Plain Ctrl+C stays ^C.
+// Desktop: Shift/Ctrl+Enter insert a newline. Ctrl+Shift+C / Cmd+C copy the selection, Ctrl+Shift+V pastes. Plain Ctrl+C stays ^C.
 // (Cmd+V goes through the browser's own paste event, which xterm handles.)
 function clipboardKeys(e) {
+  // Shift+Enter / Ctrl+Enter: xterm sends a plain Enter (or nothing). Send ESC+Enter, the newline
+  // Claude Code's /terminal-setup configures in iTerm and VS Code. Applies to keypress too, so no \r slips out.
+  if (e.key === 'Enter' && (e.shiftKey || e.ctrlKey) && !e.altKey && !e.metaKey) {
+    if (e.type === 'keydown') sendInput('\x1b\r');
+    e.preventDefault();
+    return false;
+  }
   if (e.type !== 'keydown') return true;
   const k = e.key.toLowerCase();
   if ((e.ctrlKey && e.shiftKey && k === 'c') || (e.metaKey && !e.ctrlKey && k === 'c')) {
