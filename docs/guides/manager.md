@@ -42,3 +42,7 @@ when it ended and the last thing you asked. **Restart** opens a new terminal run
 Sessions you leave with `/exit` or `/quit` are not listed. Quitting with Ctrl+C or Ctrl+D leaves no mark in
 the transcript, so those do show up; dismiss them. The list is kept in `~/.remote-terminal-server/sessions.json`
 (the 40 most recent) and is tracked whether or not the manager is running.
+
+Each one keeps the name it was given: the terminal's name if you renamed the terminal, else a name set with
+`/rename`, else its folder. Restart gives the new terminal that name. Sessions with no transcript (the manager's
+own background `claude -p` helpers) are never listed, since there is nothing to resume.
