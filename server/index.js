@@ -398,7 +398,10 @@ const server = http.createServer(async (req, res) => {
       const r = await updater.run();
       if (!r.ok) return sendJson(res, 500, { error: 'Upgrade failed', output: r.output });
       sendJson(res, 200, { ok: true });
-      return res.end(() => setTimeout(() => updater.restart(), 300));
+      // Restart on a timer, not on the response finishing: the install takes most of a minute, and if the
+      // browser stopped waiting (phone locked, tab closed) the response never finishes and the old code kept running.
+      setTimeout(() => updater.restart(), 500);
+      return;
     }
     return sendJson(res, 200, await updater.status(url.searchParams.has('force')));
   }
