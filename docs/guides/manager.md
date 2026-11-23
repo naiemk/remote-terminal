@@ -39,8 +39,9 @@ rebooted or Claude crashed) are listed under **Terminated sessions** at the bott
 when it ended, the last thing you asked and the last paragraph of Claude's reply. **Restart** opens a new terminal running the `claude` command from
 `commands.json` with `--resume <session id>` in the session's folder; **Dismiss** removes it from the list.
 
-Sessions you leave with `/exit` or `/quit` are not listed. Quitting with Ctrl+C or Ctrl+D leaves no mark in
-the transcript, so those do show up; dismiss them. The list is kept in `~/.remote-terminal-server/sessions.json`
+Sessions you quit (`/exit`, `/quit`, Ctrl+C or Ctrl+D) are not listed. A session counts as quit when Claude
+exited by itself with code 0, or when the shell or app that started it is still running after it ended; a
+session whose terminal was killed, or that ended while the server was down, counts as terminated. The list is kept in `~/.remote-terminal-server/sessions.json`
 (the 40 most recent) and is tracked whether or not the manager is running.
 
 Each one keeps the name it was given: the terminal's name if you renamed the terminal, else a name set with
