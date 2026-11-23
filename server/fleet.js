@@ -165,3 +165,11 @@ export async function projectContext(cwd) {
     head(['ROADMAP.md', 'TODO.md', 'docs/roadmap.md', 'PLAN.md', 'STATUS.md', 'CLAUDE.md'], 900),
   ].filter(Boolean).join('\n\n');
 }
+
+// Did the person leave this session on purpose? `/exit` (or `/quit`) leaves its command in the transcript;
+// a killed terminal, a crash or a reboot leaves nothing. Ctrl+C / Ctrl+D quits leave no mark either.
+export function quitByUser(sessionId) {
+  const file = findTranscript(sessionId);
+  if (!file) return false;
+  return tailLines(file, 25, 60_000).some((l) => /<command-name>\/(exit|quit)<\/command-name>/.test(l));
+}

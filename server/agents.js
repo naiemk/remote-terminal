@@ -214,12 +214,20 @@ Never call SendMessage a second time. Reply with nothing else.`);
     refreshSummary(id);
   }
 
+  // One tick at a time (a snapshot can take longer than TICK_MS), and a message can finish while the
+  // snapshot is being taken, so `pending` is read again after it.
+  let ticking = false;
   async function tick() {
-    const waiting = [...chats].filter(([, c]) => c.pending);
-    if (!waiting.length) { clearInterval(timer); timer = null; return; }
-    const sessions = await fresh();
-    for (const [id, c] of waiting) {
-      const p = c.pending, s = sessions.find((x) => x.id === id), age = Date.now() - p.since;
+    if (ticking) return;
+    if (![...chats.values()].some((c) => c.pending)) { clearInterval(timer); timer = null; return; }
+    ticking = true;
+    try { await step(await fresh()); } finally { ticking = false; }
+  }
+  async function step(sessions) {
+    for (const [id, c] of chats) {
+      const p = c.pending;
+      if (!p) continue;
+      const s = sessions.find((x) => x.id === id), age = Date.now() - p.since;
       if (p.msg && (p.msg.state === 'received' || p.msg.state === 'forwarding')) continue; // still being handed over
       if (!s) { finish(c, id, null, 'This agent ended.'); continue; }
       const mm = p.msg, live = mm && (mm.state === 'delivered' || mm.state === 'working' || mm.state === 'waiting');
@@ -236,7 +244,8 @@ Never call SendMessage a second time. Reply with nothing else.`);
     emit();
   }
 
-  const watch = () => { timer ||= setInterval(tick, TICK_MS); };
+  // A throw here must never become an unhandled rejection: that kills the server and every terminal in it.
+  const watch = () => { timer ||= setInterval(() => tick().catch((e) => console.error(`Manager agents: ${e.stack || e.message}`)), TICK_MS); };
 
   // Keep every session's brief fresh in the background, two at a time, so the board is ready when opened.
   let scanning = false;

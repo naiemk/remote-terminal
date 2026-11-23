@@ -31,3 +31,14 @@ send it to that agent, or type your own instruction in the card's box. Briefs ar
 - **Tell all idle agents…** (bottom box) sends one message to every idle agent. Busy or waiting agents are
   skipped, because typing into them would mangle their prompt.
 - **⋯ → About & version** shows the running version and the latest one, and whether you are up to date.
+
+## Terminated sessions
+
+Claude sessions that ended without being quit (their terminal was stopped, the server restarted, the machine
+rebooted or Claude crashed) are listed under **Terminated sessions** at the bottom of the board, with the folder,
+when it ended and the last thing you asked. **Restart** opens a new terminal running the `claude` command from
+`commands.json` with `--resume <session id>` in the session's folder; **Dismiss** removes it from the list.
+
+Sessions you leave with `/exit` or `/quit` are not listed. Quitting with Ctrl+C or Ctrl+D leaves no mark in
+the transcript, so those do show up; dismiss them. The list is kept in `~/.remote-terminal-server/sessions.json`
+(the 40 most recent) and is tracked whether or not the manager is running.
