@@ -215,6 +215,7 @@ function startInstance(command, cwdInput, override) {
     clearTimeout(x.detectTimer);
     try { fs.rmdirSync(x.scratch); } catch {} // only if empty: files left there are kept
     instances.delete(x.id);
+    try { ended.exited(x.pty.pid, !signal && exitCode === 0); } catch {} // tells a quit claude from a killed one
     const how = signal ? `signal ${signal}` : `code ${exitCode}`;
     console.log(`instance ${x.id} (${command}) exited with ${how}`);
     for (const c of x.clients) c.close(4404, `exited with ${how}`);
