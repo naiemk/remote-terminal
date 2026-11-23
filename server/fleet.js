@@ -73,6 +73,22 @@ export function activity(sessionId) {
   return { lastText: text.slice(0, 400), lastTool: tool, lastPrompt: prompt.slice(0, 200), mtime: fs.statSync(file).mtimeMs / 1000 };
 }
 
+// The last paragraph of the agent's last reply, as you would see it at the bottom of the chat.
+export function lastParagraph(sessionId, max = 600) {
+  const file = findTranscript(sessionId);
+  if (!file) return '';
+  for (const l of tailLines(file, 200, 400_000).reverse()) {
+    let d; try { d = JSON.parse(l); } catch { continue; }
+    const c = d.message?.content;
+    if (d.type !== 'assistant' || !Array.isArray(c)) continue;
+    const t = c.filter((b) => b.type === 'text' && b.text?.trim()).pop()?.text;
+    if (!t) continue;
+    const para = t.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean).pop() || '';
+    return para.length > max ? `${para.slice(0, max - 1)}…` : para;
+  }
+  return '';
+}
+
 // A plain-text digest of what the agent said and did since `sinceMs` (or its last `max` entries),
 // small enough to hand to a model. `count` is how many entries it holds.
 export function digest(sessionId, sinceMs = 0, max = 30) {

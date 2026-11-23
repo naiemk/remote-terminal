@@ -36,7 +36,7 @@ send it to that agent, or type your own instruction in the card's box. Briefs ar
 
 Claude sessions that ended without being quit (their terminal was stopped, the server restarted, the machine
 rebooted or Claude crashed) are listed under **Terminated sessions** at the bottom of the board, with the folder,
-when it ended and the last thing you asked. **Restart** opens a new terminal running the `claude` command from
+when it ended, the last thing you asked and the last paragraph of Claude's reply. **Restart** opens a new terminal running the `claude` command from
 `commands.json` with `--resume <session id>` in the session's folder; **Dismiss** removes it from the list.
 
 Sessions you leave with `/exit` or `/quit` are not listed. Quitting with Ctrl+C or Ctrl+D leaves no mark in

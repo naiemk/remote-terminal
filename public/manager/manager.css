@@ -48,4 +48,4 @@ button.opt.sel{background:var(--idle);color:#fff;border-color:var(--idle)}.nextb
 .screen{white-space:pre-wrap;word-break:break-word;font:12px ui-monospace,monospace;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px;margin:6px 0;max-height:220px;overflow:auto}
 
 .card.agent{border-left:4px solid var(--line);margin-bottom:14px}.card.agent .title{font-size:16px;word-break:normal}.card.agent.busy{border-left-color:#3b82f6}.card.agent.waiting{border-left-color:#f59e0b}.card.agent.idle{border-left-color:#22c55e}
-.card.ended{border-left:4px solid #ef4444;margin-bottom:14px}.endrow{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}.endrow .title{font-weight:600}.endrow .text{color:var(--mut);font-size:13px;white-space:pre-wrap}
+.card.ended{border-left:4px solid #ef4444;margin-bottom:14px}.endrow{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}.endrow .title{font-weight:600}.endrow .text{color:var(--mut);font-size:13px;white-space:pre-wrap}.endrow .reply{margin-top:4px}

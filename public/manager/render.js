@@ -164,6 +164,7 @@ function endedBox(items) {
     const r = el('div', 'endrow');
     r.append(el('div', 'title', x.name || x.id), el('div', 'sub', `${x.cwd} · ended ${ago(x.ended)}`));
     if (x.lastPrompt) r.append(el('div', 'text', 'Last asked: ' + x.lastPrompt.slice(0, 160)));
+    if (x.lastPara) r.append(el('div', 'text reply', 'Last reply: ' + x.lastPara));
     const row = el('div', 'row'), go = el('button', '', 'Restart'), no = el('button', '', 'Dismiss');
     go.onclick = async (ev) => {
       const b = ev.target, w = window.open('about:blank', '_blank'); // opened inside the tap, or popup blockers stop it

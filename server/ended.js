@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { activity, quitByUser, parents, descendsFrom, givenName, findTranscript } from './fleet.js';
+import { activity, quitByUser, parents, descendsFrom, givenName, findTranscript, lastParagraph } from './fleet.js';
 
 const SESSIONS = path.join(os.homedir(), '.claude', 'sessions');
 const KEEP = 40;
@@ -22,6 +22,8 @@ export function createEnded(file, { terminals = () => [], onChange = () => {} } 
   let db = { live: {}, ended: {}, done: [] };
   try { const d = JSON.parse(fs.readFileSync(file, 'utf8')); db = { live: d.live || {}, ended: d.ended || {}, done: d.done || [] }; } catch {}
   for (const sid of Object.keys(db.ended)) if (!findTranscript(sid)) delete db.ended[sid]; // listed by an older version
+  // Entries listed before the last paragraph was kept get it now.
+  for (const x of Object.values(db.ended)) if (x.lastPara === undefined) x.lastPara = lastParagraph(x.sid);
   const handled = (sid) => { if (!db.done.includes(sid)) db.done = [...db.done, sid].slice(-200); };
   const save = () => { try { fs.writeFileSync(file, JSON.stringify(db, null, 1)); } catch {} };
 
@@ -31,7 +33,7 @@ export function createEnded(file, { terminals = () => [], onChange = () => {} } 
     // No transcript: nothing to resume (e.g. a `claude -p --no-session-persistence` helper the manager runs).
     if (!findTranscript(rec.sid) || quitByUser(rec.sid)) return false;
     const a = activity(rec.sid);
-    db.ended[rec.sid] = { ...rec, ended: Date.now() / 1000, lastPrompt: a.lastPrompt || '', lastText: (a.lastText || '').slice(0, 200), mtime: a.mtime || 0 };
+    db.ended[rec.sid] = { ...rec, ended: Date.now() / 1000, lastPrompt: a.lastPrompt || '', lastText: (a.lastText || '').slice(0, 200), lastPara: lastParagraph(rec.sid), mtime: a.mtime || 0 };
     const all = Object.values(db.ended).sort((x, y) => y.ended - x.ended);
     for (const x of all.slice(KEEP)) delete db.ended[x.sid];
     return true;
@@ -79,7 +81,7 @@ export function createEnded(file, { terminals = () => [], onChange = () => {} } 
   return {
     scan,
     list: () => Object.values(db.ended).sort((a, b) => b.ended - a.ended)
-      .map((x) => ({ sid: x.sid, id: x.sid.slice(0, 8), name: x.name, cwd: tildify(x.cwd), ended: x.ended, started: x.started, lastPrompt: x.lastPrompt, lastText: x.lastText })),
+      .map((x) => ({ sid: x.sid, id: x.sid.slice(0, 8), name: x.name, cwd: tildify(x.cwd), ended: x.ended, started: x.started, lastPrompt: x.lastPrompt, lastText: x.lastText, lastPara: x.lastPara || '' })),
     get: (sid) => db.ended[sid] || null,
     dismiss(sid) { if (!db.ended[sid]) return false; delete db.ended[sid]; save(); onChange(); return true; },
     isId: (sid) => UUID.test(String(sid)),
