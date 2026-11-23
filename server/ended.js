@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { activity, quitByUser } from './fleet.js';
+import { activity, quitByUser, parents, descendsFrom, givenName, findTranscript } from './fleet.js';
 
 const SESSIONS = path.join(os.homedir(), '.claude', 'sessions');
 const KEEP = 40;
@@ -14,18 +14,22 @@ const tildify = (p) => (p || '').replace(os.homedir(), '~');
 
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 
-// `names()` maps a session id to the best name known for it (its terminal's name, or a /rename).
-export function createEnded(file, { names = () => new Map(), onChange = () => {} } = {}) {
+// `terminals()` lists this server's terminals as { pid, name } (name: what the user called it, or empty).
+// A session keeps the name it was given: its terminal's name, else a /rename, else the last one remembered,
+// else its folder. Read here directly, so names are kept whether or not the manager is on.
+export function createEnded(file, { terminals = () => [], onChange = () => {} } = {}) {
   // done: dead sessions already handled (listed, dismissed or quit), so a leftover session file is not picked up again.
   let db = { live: {}, ended: {}, done: [] };
   try { const d = JSON.parse(fs.readFileSync(file, 'utf8')); db = { live: d.live || {}, ended: d.ended || {}, done: d.done || [] }; } catch {}
+  for (const sid of Object.keys(db.ended)) if (!findTranscript(sid)) delete db.ended[sid]; // listed by an older version
   const handled = (sid) => { if (!db.done.includes(sid)) db.done = [...db.done, sid].slice(-200); };
   const save = () => { try { fs.writeFileSync(file, JSON.stringify(db, null, 1)); } catch {} };
 
   function end(rec) {
     delete db.live[rec.sid];
     handled(rec.sid);
-    if (quitByUser(rec.sid)) return false;
+    // No transcript: nothing to resume (e.g. a `claude -p --no-session-persistence` helper the manager runs).
+    if (!findTranscript(rec.sid) || quitByUser(rec.sid)) return false;
     const a = activity(rec.sid);
     db.ended[rec.sid] = { ...rec, ended: Date.now() / 1000, lastPrompt: a.lastPrompt || '', lastText: (a.lastText || '').slice(0, 200), mtime: a.mtime || 0 };
     const all = Object.values(db.ended).sort((x, y) => y.ended - x.ended);
@@ -33,16 +37,27 @@ export function createEnded(file, { names = () => new Map(), onChange = () => {}
     return true;
   }
 
-  function scan() {
+  let scanning = false;
+  async function scan() {
+    if (scanning) return;
+    scanning = true;
+    try { await scanOnce(); } finally { scanning = false; }
+  }
+
+  async function scanOnce() {
     let changed = false;
-    const named = names(), recs = [];
+    const recs = [], terms = terminals().filter((t) => t.pid && String(t.name || '').trim());
+    const procs = terms.length ? await parents().catch(() => new Map()) : new Map();
+    const termName = (pid) => String(terms.find((t) => descendsFrom(pid, t.pid, procs))?.name || '').trim();
     let files = [];
     try { files = fs.readdirSync(SESSIONS).filter((f) => f.endsWith('.json')); } catch {}
     for (const f of files) {
       let s; try { s = JSON.parse(fs.readFileSync(path.join(SESSIONS, f), 'utf8')); } catch { continue; }
       const sid = String(s.sessionId || '');
       if (s.kind !== 'interactive' || !s.pid || !UUID.test(sid)) continue;
-      recs.push({ sid, pid: s.pid, cwd: s.cwd || '', up: alive(s.pid), name: named.get(sid) || db.live[sid]?.name || String(s.name || '').trim() || path.basename(s.cwd || ''), started: (s.startedAt || 0) / 1000 });
+      const up = alive(s.pid);
+      const name = (up && termName(s.pid)) || givenName(s) || db.live[sid]?.name || path.basename(s.cwd || '');
+      recs.push({ sid, pid: s.pid, cwd: s.cwd || '', up, name, started: (s.startedAt || 0) / 1000 });
     }
     const seen = new Set(recs.filter((r) => r.up).map((r) => r.sid));
     for (const { up, ...rec } of recs) {

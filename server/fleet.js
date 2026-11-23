@@ -14,7 +14,7 @@ const run = (cmd, args, timeout) => new Promise((resolve) => {
 });
 
 // One `ps` call gives every process's parent; works on Linux and macOS (there is no /proc on macOS).
-async function parents() {
+export async function parents() {
   const map = new Map();
   for (const l of (await run('ps', ['-A', '-o', 'pid=,ppid='], 5000)).split('\n')) {
     const [pid, ppid] = l.trim().split(/\s+/).map(Number);
@@ -40,7 +40,7 @@ function tailLines(file, n = 60, size = 200_000) {
   } finally { fs.closeSync(fd); }
 }
 
-function findTranscript(sessionId) {
+export function findTranscript(sessionId) {
   const dir = path.join(HOME, 'projects');
   try {
     for (const p of fs.readdirSync(dir)) {
@@ -101,7 +101,7 @@ export function digest(sessionId, sinceMs = 0, max = 30) {
 // (`terminal`) so it can be talked to and opened. Others are visible but read-only.
 // Claude auto-names sessions "<folder>-<2 chars>" (plaee-6f, remote-terminal-35); those say nothing, so only a
 // name that is not of that shape (one you typed with /rename) counts.
-function givenName(s) {
+export function givenName(s) {
   const n = String(s.name || '').trim(), base = path.basename(s.cwd || '');
   return n && !new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-[0-9a-z]{2}$`, 'i').test(n) ? n : '';
 }

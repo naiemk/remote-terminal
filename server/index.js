@@ -257,11 +257,11 @@ function sendTo(id, text) {
 
 // Claude sessions that were terminated rather than quit, kept across restarts so they can be resumed.
 const ended = createEnded(path.join(CONFIG_DIR, 'sessions.json'), {
-  names: () => new Map((mgr?.manager.fleet().sessions || []).map((s) => [s.sid, s.name])),
+  terminals: () => [...instances.values()].map((x) => ({ pid: x.pty.pid, name: x.name || '' })),
   onChange: () => mgr?.http.broadcast(),
 });
-setTimeout(() => ended.scan(), 3000); // after the manager's first snapshot, so names are known
-setInterval(() => ended.scan(), 10_000);
+setTimeout(() => ended.scan().catch(() => {}), 3000);
+setInterval(() => ended.scan().catch(() => {}), 10_000);
 
 // Resume a terminated session in a new terminal: the "claude" command from commands.json plus --resume.
 function restartSession(sid) {
