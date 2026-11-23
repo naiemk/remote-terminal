@@ -9,6 +9,7 @@ async function act(action, args, text) {
   const j = await r.json().catch(() => ({}));
   actErr = (!r.ok || j.ok === false) ? (j.error || 'failed') : '';
   $('err').textContent = actErr;
+  return j;
 }
 
 function node(n, fleet) {
@@ -27,6 +28,7 @@ function node(n, fleet) {
     }
     case 'session': { const x = fleet.sessions.find((y) => y.id === n.id); return x ? node(sessionCard(x), fleet) : el('span'); }
     case 'next': return nextBox(n.id);
+    case 'ended': return endedBox(n.items);
     case 'text': return el('p', '', n.text);
     case 'list': { const e = el('ul'); for (const i of n.items) e.append(el('li', '', i)); return e; }
     case 'button': {
@@ -147,7 +149,31 @@ function fallback(fleet) {
   return { type: 'stack', children: [
     { type: 'stats', items: [{ label: 'sessions', value: S.length }, { label: 'active', value: active }, { label: 'idle', value: S.length - active }] },
     ...S.map(sessionCard),
+    ...(last?.ended?.length ? [{ type: 'ended', items: last.ended }] : []),
   ] };
+}
+
+const ago = (t) => { const m = Math.max(0, Math.round((Date.now() / 1000 - t) / 60)); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
+
+// Claude sessions that were terminated (terminal killed, server restarted, crash) rather than quit with /exit.
+// Restart resumes one in a new terminal (claude --resume) and opens it.
+function endedBox(items) {
+  const e = el('div', 'card ended');
+  const top = el('div', 'top'); top.append(el('span', 'title', 'Terminated sessions'), el('span', 'badge', String(items.length))); e.append(top);
+  for (const x of items) {
+    const r = el('div', 'endrow');
+    r.append(el('div', 'title', x.name || x.id), el('div', 'sub', `${x.cwd} · ended ${ago(x.ended)}`));
+    if (x.lastPrompt) r.append(el('div', 'text', 'Last asked: ' + x.lastPrompt.slice(0, 160)));
+    const row = el('div', 'row'), go = el('button', '', 'Restart'), no = el('button', '', 'Dismiss');
+    go.onclick = async (ev) => {
+      const b = ev.target, w = window.open('about:blank', '_blank'); // opened inside the tap, or popup blockers stop it
+      b.disabled = true; const j = await act('restart_session', { sid: x.sid }); b.disabled = false;
+      if (j.ok && j.terminal) { if (w) w.location = consoleUrl(j.terminal); else location.href = consoleUrl(j.terminal); } else w?.close();
+    };
+    no.onclick = (ev) => { ev.target.disabled = true; act('dismiss_session', { sid: x.sid }); };
+    row.append(go, no); r.append(row); e.append(r);
+  }
+  return e;
 }
 
 // Which voice the briefing will use: the server's neural one (plays with the phone locked) or the browser's.

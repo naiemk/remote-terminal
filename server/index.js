@@ -19,6 +19,7 @@ import { createFiles } from './files.js';
 import { foreground } from './procinfo.js';
 import { createConsoles } from './consoles.js';
 import { createUpdater } from './updater.js';
+import { createEnded } from './ended.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -178,8 +179,9 @@ async function detect(x) {
 }
 setInterval(() => { for (const x of instances.values()) detect(x); }, 2000);
 
-function startInstance(command, cwdInput) {
-  const spec = loadCommands()[command];
+// `override` runs a given command line under a command's label (used to resume a Claude session).
+function startInstance(command, cwdInput, override) {
+  const spec = override || loadCommands()[command];
   if (!spec) throw new Error(`Unknown command "${command}"`);
   const cwd = path.resolve(DEFAULT_CWD, expandHome(String(cwdInput || spec.cwd || DEFAULT_CWD)));
   if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`No such directory: ${tildify(cwd)}`);
@@ -253,6 +255,26 @@ function sendTo(id, text) {
   return { ok: true };
 }
 
+// Claude sessions that were terminated rather than quit, kept across restarts so they can be resumed.
+const ended = createEnded(path.join(CONFIG_DIR, 'sessions.json'), {
+  names: () => new Map((mgr?.manager.fleet().sessions || []).map((s) => [s.sid, s.name])),
+  onChange: () => mgr?.http.broadcast(),
+});
+setTimeout(() => ended.scan(), 3000); // after the manager's first snapshot, so names are known
+setInterval(() => ended.scan(), 10_000);
+
+// Resume a terminated session in a new terminal: the "claude" command from commands.json plus --resume.
+function restartSession(sid) {
+  const rec = ended.get(sid);
+  if (!rec || !ended.isId(sid)) return { ok: false, error: 'no such ended session' };
+  const base = loadCommands().claude?.cmd || 'claude';
+  let x;
+  try { x = startInstance('claude', rec.cwd || DEFAULT_CWD, { cmd: `${base} --resume ${sid}` }); } catch (e) { return { ok: false, error: e.message }; }
+  x.name = String(rec.name || '').replace(/[\x00-\x1f\x7f]/g, '').slice(0, 60);
+  ended.dismiss(sid);
+  return { ok: true, terminal: x.id };
+}
+
 // The last lines on a terminal's screen as plain text: what a waiting agent is asking.
 function screen(id) {
   const x = instances.get(id);
@@ -306,6 +328,7 @@ async function loadManager() {
   http = H.createManagerServer({
     manager: mm, agents: ag, killTerminal: (id) => { const x = instances.get(id); if (x) killInstance(x); return !!x; }, guide: GUIDE,
     dir: path.join(PUBLIC_DIR, 'manager'), port: MANAGER_PORT, checkRequest, sendTo, readBody, reload: reloadManager, about: () => updater.status(),
+    ended: { list: ended.list, restart: restartSession, dismiss: ended.dismiss },
   });
   mgr = { manager: mm, agents: ag, http };
   await http.listen();
@@ -484,6 +507,8 @@ function shutdown(code = 0) {
   process.exit(code);
 }
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => shutdown(0));
+// The manager is hot-reloaded code running in this process; a stray rejection in it must not take every terminal down.
+process.on('unhandledRejection', (e) => console.error(`Unhandled rejection (kept running): ${e?.stack || e}`));
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') console.error(`Port ${PORT} is already in use. Is remote-terminal-server already running? Pick another with --port.`);
