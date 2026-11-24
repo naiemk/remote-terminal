@@ -27,6 +27,12 @@ Every session card shows what the agent is doing, any blocker, and three suggest
 send it to that agent, or type your own instruction in the card's box. Briefs are made in the background
 (about once a minute, and only for agents whose transcript changed), so you do not need to open each chat.
 
+Cards sit in a grid (two or more columns on a wide screen), sorted so agents waiting on you come first, then
+working, then idle, newest first within each. Each card's subtitle shows the folder, where it runs and how long
+ago it last changed; **Chat ›** in its top-right corner opens the agent's chat. Long summaries are cut to three
+lines; tap one to expand it. The chips above the grid (**all**, **need you**, **working**, **idle**) show counts and
+filter the cards; the choice is remembered per browser.
+
 - **Keep all going** (top bar) sends each idle agent its top suggested move.
 - **Tell all idle agents…** (bottom box) sends one message to every idle agent. Busy or waiting agents are
   skipped, because typing into them would mangle their prompt.
@@ -35,7 +41,8 @@ send it to that agent, or type your own instruction in the card's box. Briefs ar
 ## Terminated sessions
 
 Claude sessions that ended without being quit (their terminal was stopped, the server restarted, the machine
-rebooted or Claude crashed) are listed under **Terminated sessions** at the bottom of the board, with the folder,
+rebooted or Claude crashed) are listed under **Terminated sessions** at the bottom of the board (collapsed; tap
+it to open, **Dismiss all** clears the list), with the folder,
 when it ended, the last thing you asked and the last paragraph of Claude's reply. **Restart** opens a new terminal running the `claude` command from
 `commands.json` with `--resume <session id>` in the session's folder; **Dismiss** removes it from the list.
 
