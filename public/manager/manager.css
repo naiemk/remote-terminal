@@ -49,3 +49,28 @@ button.opt.sel{background:var(--idle);color:#fff;border-color:var(--idle)}.nextb
 
 .card.agent{border-left:4px solid var(--line);margin-bottom:14px}.card.agent .title{font-size:16px;word-break:normal}.card.agent.busy{border-left-color:#3b82f6}.card.agent.waiting{border-left-color:#f59e0b}.card.agent.idle{border-left-color:#22c55e}
 .card.ended{border-left:4px solid #ef4444;margin-bottom:14px}.endrow{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}.endrow .title{font-weight:600}.endrow .text{color:var(--mut);font-size:13px;white-space:pre-wrap}.endrow .reply{margin-top:4px}
+
+/* Board layout: chips that filter, a responsive grid of cards, a compact recovery list. */
+body{max-width:1500px;margin:0 auto}
+button{cursor:pointer}button:hover:not(:disabled){filter:brightness(1.12)}button.small{padding:4px 10px;font-size:13px;border-radius:8px}
+.filters{display:flex;gap:8px;flex-wrap:wrap}
+.chip{display:flex;align-items:baseline;gap:6px;background:var(--card);border:1px solid var(--line);border-radius:99px;padding:6px 14px}
+.chip b{font-size:17px}.chip span{font-size:12px;color:var(--mut)}
+.chip.waiting b{color:var(--wait)}.chip.busy b{color:var(--busy)}.chip.idle b{color:var(--idle)}
+.chip.sel{border-color:var(--fg);box-shadow:inset 0 0 0 1px var(--fg)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:14px;align-items:start}
+.grid>.card.agent{margin-bottom:0}
+.card .text.clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;cursor:pointer}
+.card .text.clamp:hover{color:var(--fg);opacity:.85}
+.card.agent .sub{margin-bottom:6px}
+.card.agent .nextbox{margin-bottom:0}
+.card.agent button.opt{padding:8px 12px;font-weight:500;font-size:14px;margin-top:0}
+.blocker{font-size:14px;margin-top:2px}
+details.ended>summary{list-style:none;cursor:pointer}details.ended>summary::-webkit-details-marker{display:none}
+details.ended>summary .title::before{content:'▸ ';color:var(--mut)}details.ended[open]>summary .title::before{content:'▾ '}
+.endrow{display:flex;gap:12px;align-items:flex-start}.endrow .info{flex:1;min-width:0}
+.endrow .text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.acts2{display:flex;gap:6px;flex-shrink:0}
+#voice button{border-radius:12px}#vfull{padding:10px 14px;font-size:15px}
+@media(min-width:900px){#voice{max-width:520px}}
+@media(prefers-color-scheme:light){.badge.idle{color:#1f6feb}.badge.busy,.badge.running{color:#bc4c00}.badge.waiting{color:#9a6700}.chip.waiting b{color:#9a6700}.chip.busy b{color:#bc4c00}.chip.idle b{color:#1f6feb}}

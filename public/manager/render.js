@@ -3,6 +3,9 @@
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 let last = null, actErr = '';
+const opened = new Set(); // cards whose full text is shown
+let filter = (() => { try { return localStorage.getItem('mgrFilter') || 'all'; } catch { return 'all'; } })();
+let endedOpen = false;
 
 async function act(action, args, text) {
   const r = await fetch('api/act', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, args, text }) });
@@ -20,10 +23,28 @@ function node(n, fleet) {
       const e = el('div', 'card' + (n.cls ? ' ' + n.cls : '')), top = el('div', 'top');
       top.append(el('span', 'title', n.title));
       if (n.badge) top.append(el('span', 'badge ' + n.badge.toLowerCase().replace(/\W/g, ''), n.badge));
+      if (n.head) { const h = node(n.head, fleet); h.classList.add('tr', 'small'); top.append(h); }
       e.append(top);
       if (n.subtitle) e.append(el('div', 'sub', n.subtitle));
-      if (n.text) e.append(el('div', 'text', n.text));
+      if (n.text) {
+        // Long updates show three lines; a tap opens the rest. Kept open across board updates.
+        const key = n.key || n.title, t = el('div', 'text' + (n.clamp && !opened.has(key) ? ' clamp' : ''), n.text);
+        if (n.clamp) { t.title = 'Tap to show all'; t.onclick = (ev) => { opened.has(key) ? opened.delete(key) : opened.add(key); ev.currentTarget.classList.toggle('clamp', !opened.has(key)); }; }
+        e.append(t);
+      }
       for (const c of n.children) e.append(node(c, fleet));
+      return e;
+    }
+    case 'grid': { const e = el('div', 'grid'); for (const c of n.children) e.append(node(c, fleet)); return e; }
+    case 'filters': {
+      // Status chips: the counts double as filters for the cards below.
+      const e = el('div', 'filters');
+      for (const i of n.items) {
+        const b = el('button', 'chip ' + i.key + (filter === i.key ? ' sel' : ''));
+        b.append(el('b', '', String(i.value)), el('span', '', i.label));
+        b.onclick = () => { filter = filter === i.key ? 'all' : i.key; try { localStorage.setItem('mgrFilter', filter); } catch {} render(last); };
+        e.append(b);
+      }
       return e;
     }
     case 'session': { const x = fleet.sessions.find((y) => y.id === n.id); return x ? node(sessionCard(x), fleet) : el('span'); }
@@ -70,9 +91,10 @@ const consoleUrl = (id) => `${app || location.origin}/#${encodeURIComponent(id)}
 function sessionCard(s) {
   const a = (last?.agents || {})[s.id], b = a?.brief || {};
   const where = s.terminal ? 'Remote Terminal' : 'outside Remote Terminal';
-  return { type: 'card', cls: 'agent ' + String(s.status).toLowerCase().replace(/\W/g, ''), title: s.name, subtitle: `${where} · ${s.cwd}`, badge: s.status, text: [b.title, b.task || s.lastText].filter(Boolean).join(' — '), children: [
-    { type: 'next', id: s.id },
-    { type: 'button', label: 'Open chat', action: 'open_chat', args: { id: s.id } }] };
+  const when = s.updated ? ' · ' + ago(s.updated) : '';
+  return { type: 'card', key: s.id, clamp: true, cls: 'agent ' + String(s.status).toLowerCase().replace(/\W/g, ''), title: s.name, subtitle: `${s.cwd} · ${where}${when}`, badge: s.status,
+    head: { type: 'button', label: 'Chat ›', action: 'open_chat', args: { id: s.id } },
+    text: [b.title, b.task || s.lastText].filter(Boolean).join(' — '), children: [{ type: 'next', id: s.id }] };
 }
 
 // Pick one of the suggested next moves and/or add your own words, then send: the whole dispatch for one agent.
@@ -143,12 +165,19 @@ function morph(old, nw) {
   return old;
 }
 
+// Waiting (needs an answer) first, then working, then idle; most recently active first within each.
+const RANK = { waiting: 0, busy: 1, idle: 2, other: 3 };
+const kind = (s) => { const v = String(s.status).toLowerCase(); return v === 'running' ? 'busy' : RANK[v] != null ? v : 'other'; };
+
 // What to show before the manager has designed anything, or when it is off.
 function fallback(fleet) {
-  const S = fleet.sessions, active = S.filter((s) => s.status !== 'idle').length;
+  const S = [...fleet.sessions].sort((a, b) => (RANK[kind(a)] - RANK[kind(b)]) || ((b.updated || 0) - (a.updated || 0)));
+  const count = (k) => S.filter((s) => kind(s) === k).length;
+  const shown = filter === 'all' ? S : S.filter((s) => kind(s) === filter);
   return { type: 'stack', children: [
-    { type: 'stats', items: [{ label: 'sessions', value: S.length }, { label: 'active', value: active }, { label: 'idle', value: S.length - active }] },
-    ...S.map(sessionCard),
+    { type: 'filters', items: [{ key: 'all', label: 'all', value: S.length }, { key: 'waiting', label: 'need you', value: count('waiting') },
+      { key: 'busy', label: 'working', value: count('busy') }, { key: 'idle', label: 'idle', value: count('idle') }] },
+    shown.length ? { type: 'grid', children: shown.map(sessionCard) } : { type: 'text', text: 'No sessions here.' },
     ...(last?.ended?.length ? [{ type: 'ended', items: last.ended }] : []),
   ] };
 }
@@ -158,14 +187,26 @@ const ago = (t) => { const m = Math.max(0, Math.round((Date.now() / 1000 - t) / 
 // Claude sessions that were terminated (terminal killed, server restarted, crash) rather than quit with /exit.
 // Restart resumes one in a new terminal (claude --resume) and opens it.
 function endedBox(items) {
-  const e = el('div', 'card ended');
-  const top = el('div', 'top'); top.append(el('span', 'title', 'Terminated sessions'), el('span', 'badge', String(items.length))); e.append(top);
+  // Collapsed by default: it is a recovery list, not work in progress.
+  const e = el('details', 'card ended');
+  if (endedOpen) e.setAttribute('open', '');
+  const top = el('summary', 'top'), all = el('button', 'tr small', 'Dismiss all');
+  top.append(el('span', 'title', 'Terminated sessions'), el('span', 'badge', String(items.length)), all);
+  top.onclick = (ev) => { if (ev.target.closest('button')) return; endedOpen = !endedOpen; };
+  all.onclick = async (ev) => {
+    ev.preventDefault();
+    if (!confirm(`Dismiss all ${items.length} terminated sessions? They can no longer be restarted from here.`)) return;
+    ev.currentTarget.disabled = true;
+    for (const x of items) await act('dismiss_session', { sid: x.sid });
+  };
+  e.append(top);
   for (const x of items) {
-    const r = el('div', 'endrow');
-    r.append(el('div', 'title', x.name || x.id), el('div', 'sub', `${x.cwd} · ended ${ago(x.ended)}`));
-    if (x.lastPrompt) r.append(el('div', 'text', 'Last asked: ' + x.lastPrompt.slice(0, 160)));
-    if (x.lastPara) r.append(el('div', 'text reply', 'Last reply: ' + x.lastPara));
-    const row = el('div', 'row'), go = el('button', '', 'Restart'), no = el('button', '', 'Dismiss');
+    const r = el('div', 'endrow'), info = el('div', 'info');
+    info.append(el('div', 'title', x.name || x.id), el('div', 'sub', `${x.cwd} · ended ${ago(x.ended)}`));
+    if (x.lastPrompt) info.append(el('div', 'text', 'Asked: ' + x.lastPrompt.slice(0, 160)));
+    if (x.lastPara) info.append(el('div', 'text reply', 'Reply: ' + x.lastPara));
+    r.append(info);
+    const row = el('div', 'acts2'), go = el('button', 'small', 'Restart'), no = el('button', 'small', 'Dismiss');
     go.onclick = async (ev) => {
       const b = ev.target, w = window.open('about:blank', '_blank'); // opened inside the tap, or popup blockers stop it
       b.disabled = true; const j = await act('restart_session', { sid: x.sid }); b.disabled = false;
